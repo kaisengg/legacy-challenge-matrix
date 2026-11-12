@@ -101,6 +101,16 @@
   .detail th, .detail td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   .detail th { color: var(--muted); font-size: 12px; font-weight: 600; }
   .detail .scroll { max-height: 380px; overflow: auto; }
+  .detail h3 { font: 600 14px/1.3 var(--font-display); margin: 0; }
+  .dgrid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 18px; }
+  @media (max-width: 900px) { .dgrid { grid-template-columns: minmax(0, 1fr); } }
+  .dcol { min-width: 0; }
+  .dhead { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; min-height: 34px; }
+  .dhead input { width: 200px; max-width: 100%; }
+  .detail td.num, .detail th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .detail tr.prow { cursor: pointer; }
+  .detail tr.prow:hover { background: var(--sel); }
+  .detail tr.prow.sel { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
   .muted { color: var(--muted); }
   .w { color: rgb(var(--good)); font-weight: 600; } .l { color: rgb(var(--bad)); font-weight: 600; }
   a { color: var(--accent); }
@@ -554,27 +564,101 @@ function renderDetail() {
     return { ev: r.ev, rnd: r.rnd, top8: r.rnd > r.ev.swiss_rounds, me, op, mg, og };
   }).sort((x, y) => y.ev.date.localeCompare(x.ev.date) || y.rnd - x.rnd);
   const [lo, hi] = wilson(w, w + l);
+
+  // Per-pilot records. In a mirror both players piloted the deck, so count each side.
+  const sides = a === b
+    ? rows.flatMap((r) => [r, { ...r, me: r.op, op: r.me, mg: r.og, og: r.mg }])
+    : rows;
+  const pilots = new Map();
+  for (const r of sides) {
+    let p = pilots.get(r.me.name);
+    if (!p) pilots.set(r.me.name, p = { name: r.me.name, w: 0, l: 0, d: 0, gw: 0, gl: 0, events: new Set() });
+    if (r.mg > r.og) p.w++; else if (r.og > r.mg) p.l++; else p.d++;
+    p.gw += r.mg; p.gl += r.og; p.events.add(r.ev.id);
+  }
+  const pilotList = [...pilots.values()].sort((x, y) => (y.w + y.l + y.d) - (x.w + x.l + x.d) || y.w - x.w || x.name.localeCompare(y.name));
+
+  // Keep the player filter while the same cell stays open; reset it for a new cell.
+  const key = a + "\u0000" + b;
+  if (state.detailKey !== key) { state.detailKey = key; state.dq = ""; state.dp = null; }
+  if (state.dp && !pilots.has(state.dp)) state.dp = null;
+
   box.hidden = false;
-  box.innerHTML = `<h2></h2><p class="muted" style="margin:0 0 10px"></p><div class="scroll"><table><thead><tr><th>Date</th><th>Event</th><th>Round</th><th>Player</th><th>Result</th><th>Opponent</th>${b === "*" ? "<th>Opp. deck</th>" : ""}</tr></thead><tbody></tbody></table></div>`;
+  box.innerHTML = `<h2></h2><p class="muted" style="margin:0 0 12px"></p>
+    <div class="dgrid">
+      <div class="dcol">
+        <div class="dhead"><h3>By player</h3>
+          <input type="search" id="pilotSearch" placeholder="Filter by username" autocomplete="off" aria-label="Filter players by username"></div>
+        <div class="scroll"><table class="pilots"><thead><tr><th>Player</th><th class="num">Matches</th><th class="num">Win %</th><th class="num">Games</th><th class="num">Events</th></tr></thead><tbody></tbody></table></div>
+        <p class="hint" style="margin:6px 0 0">Click a player to show only their matches.</p>
+      </div>
+      <div class="dcol">
+        <div class="dhead"><h3 id="matchHead">Matches</h3><button id="pilotClear" hidden>Show all players</button></div>
+        <div class="scroll"><table class="mlist"><thead><tr><th>Date</th><th>Event</th><th>Round</th><th>Player</th><th>Result</th><th>Opponent</th>${b === "*" ? "<th>Opp. deck</th>" : ""}</tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>`;
   box.querySelector("h2").textContent = b === "*" ? `${a} vs the field` : a === b ? `${a} mirror` : `${a} vs ${b}`;
   box.querySelector("p").textContent = a === b ? `${rows.length} mirror matches` :
     `Matches ${w}-${l} (${(pct(w, l) * 100).toFixed(1)}%), 95% CI ${(lo * 100).toFixed(0)}–${(hi * 100).toFixed(0)}%. Games ${gw}-${gl} (${(pct(gw, gl) * 100).toFixed(1)}%).`;
-  const tb = box.querySelector("tbody"), frag = document.createDocumentFragment();
-  for (const r of rows.slice(0, 1500)) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${r.ev.date}</td><td><a target="_blank" rel="noopener"></a></td><td>${r.top8 ? "Top 8" : "R" + r.rnd}</td><td><a target="_blank" rel="noopener"></a></td>` +
-      `<td class="${r.mg > r.og ? "w" : r.og > r.mg ? "l" : ""}">${r.mg}-${r.og}</td><td><a target="_blank" rel="noopener"></a></td>${b === "*" ? "<td></td>" : ""}`;
-    const [evLink, meLink, opLink] = tr.querySelectorAll("a");
-    evLink.href = `https://www.mtggoldfish.com/tournament/${r.ev.gf}#paper`; evLink.textContent = r.ev.name;
-    evLink.title = "Open this challenge on MTGGoldfish";
-    for (const [a, p] of [[meLink, r.me], [opLink, r.op]]) {
-      a.href = playerUrl(p.name); a.textContent = p.name; a.title = `${p.name} on MTGGoldfish`;
+
+  const search = box.querySelector("#pilotSearch");
+  search.value = state.dq;
+  const link = (el, p) => { el.href = playerUrl(p.name); el.textContent = p.name; el.title = `${p.name} on MTGGoldfish`; };
+
+  function fill() {
+    const q = state.dq.trim().toLowerCase();
+    const matchesQ = (name) => !q || name.toLowerCase().includes(q);
+
+    // Player table
+    const ptb = box.querySelector("table.pilots tbody"); ptb.innerHTML = "";
+    const shown = pilotList.filter((p) => matchesQ(p.name));
+    for (const p of shown.slice(0, 500)) {
+      const tr = document.createElement("tr");
+      tr.className = "prow" + (state.dp === p.name ? " sel" : "");
+      tr.tabIndex = 0;
+      tr.innerHTML = `<td><a target="_blank" rel="noopener"></a></td><td class="num">${p.w}-${p.l}${p.d ? "-" + p.d : ""}</td>` +
+        `<td class="num">${isNaN(pct(p.w, p.l)) ? "–" : (pct(p.w, p.l) * 100).toFixed(0) + "%"}</td><td class="num">${p.gw}-${p.gl}</td><td class="num">${p.events.size}</td>`;
+      link(tr.querySelector("a"), p);
+      tr.querySelector("a").onclick = (e) => e.stopPropagation();
+      const pick = () => { state.dp = state.dp === p.name ? null : p.name; fill(); };
+      tr.onclick = pick;
+      tr.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+      ptb.appendChild(tr);
     }
-    if (b === "*") tr.cells[6].textContent = keyOf(r.op);
-    frag.appendChild(tr);
+    if (!shown.length) ptb.innerHTML = `<tr><td colspan="5" class="muted">No player matches “${esc(state.dq)}”.</td></tr>`;
+
+    // Match list: the selected player, else everyone matching the search
+    const inList = (r) => state.dp ? (r.me.name === state.dp || (a === b && r.op.name === state.dp))
+                                   : (matchesQ(r.me.name) || (a === b && matchesQ(r.op.name)));
+    const list = rows.filter(inList).map((r) => (a === b && state.dp && r.op.name === state.dp)
+      ? { ...r, me: r.op, op: r.me, mg: r.og, og: r.mg } : r);
+    const head = box.querySelector("#matchHead");
+    if (state.dp) {
+      const p = pilots.get(state.dp);
+      head.textContent = `${state.dp}: ${p.w}-${p.l}${p.d ? "-" + p.d : ""} in matches, ${p.gw}-${p.gl} in games`;
+    } else head.textContent = q ? `Matches (${list.length} for “${state.dq}”)` : `Matches (${list.length})`;
+    box.querySelector("#pilotClear").hidden = !state.dp;
+
+    const tb = box.querySelector("table.mlist tbody"); tb.innerHTML = "";
+    const frag = document.createDocumentFragment();
+    for (const r of list.slice(0, 1500)) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${r.ev.date}</td><td><a target="_blank" rel="noopener"></a></td><td>${r.top8 ? "Top 8" : "R" + r.rnd}</td><td><a target="_blank" rel="noopener"></a></td>` +
+        `<td class="${r.mg > r.og ? "w" : r.og > r.mg ? "l" : ""}">${r.mg}-${r.og}</td><td><a target="_blank" rel="noopener"></a></td>${b === "*" ? "<td></td>" : ""}`;
+      const [evLink, meLink, opLink] = tr.querySelectorAll("a");
+      evLink.href = `https://www.mtggoldfish.com/tournament/${r.ev.gf}#paper`; evLink.textContent = r.ev.name;
+      evLink.title = "Open this challenge on MTGGoldfish";
+      link(meLink, r.me); link(opLink, r.op);
+      if (b === "*") tr.cells[6].textContent = keyOf(r.op);
+      frag.appendChild(tr);
+    }
+    tb.appendChild(frag);
+    if (list.length > 1500) head.textContent += ` (showing the latest 1,500)`;
   }
-  tb.appendChild(frag);
-  if (rows.length > 1500) box.querySelector("p").textContent += ` Showing the latest 1,500 of ${rows.length.toLocaleString()}.`;
+
+  search.oninput = () => { state.dq = search.value; state.dp = null; fill(); };
+  box.querySelector("#pilotClear").onclick = () => { state.dp = null; fill(); };
+  fill();
 }
 
 $("csv").onclick = async () => {
