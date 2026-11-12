@@ -8,10 +8,8 @@ on:
     branches: [main]
     paths: ["site/index.html", "*.py", "aliases.json", ".github/workflows/refresh.yml"]
 
-permissions:
-  contents: write             # commit the refreshed site/data.json
-  pages: write
-  id-token: write
+# Least privilege: nothing by default, each job asks only for what it needs.
+permissions: {}
 
 concurrency:
   group: refresh
@@ -21,6 +19,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: write         # commit the refreshed site/data.json
     steps:
       - uses: actions/checkout@v4
 
@@ -30,7 +30,7 @@ jobs:
 
       # Downloaded sheets are kept between runs so each day only fetches new ones.
       - name: Restore sheet cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: cache
           key: sheets-${{ github.run_id }}
@@ -39,18 +39,35 @@ jobs:
       - name: Download new sheets and rebuild data
         run: python -u build_data.py
 
+      # Saved even if a later step fails, so the next run does not start from scratch.
+      - name: Save sheet cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: cache
+          key: sheets-${{ github.run_id }}
+
+      # site/data.json is generated, so if main moved meanwhile this run's fresh build wins
+      # (-X theirs = the commit being replayed). A failed commit does not block the deploy.
       - name: Commit refreshed data
+        continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add site/data.json
           if git diff --staged --quiet; then
             echo "No data changes."
-          else
-            git commit -m "Refresh data $(date -u +%Y-%m-%d)"
-            git pull --rebase
-            git push
+            exit 0
           fi
+          git commit -m "Refresh data $(date -u +%Y-%m-%d)"
+          for attempt in 1 2 3; do
+            git fetch origin "$GITHUB_REF_NAME"
+            git rebase -X theirs "origin/$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && exit 0
+            git rebase --abort 2>/dev/null || true
+            sleep 5
+          done
+          echo "Could not push refreshed data after 3 attempts" >&2
+          exit 1
 
       - name: Build static site
         run: python build_pages.py
@@ -62,6 +79,9 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write            # publish to GitHub Pages
+      id-token: write         # proves to Pages that the deploy comes from this workflow
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
