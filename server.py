@@ -149,9 +149,14 @@ def events_between(start: date, end: date) -> list[dict]:
                     continue
                 if start <= d <= end:
                     kind = re.sub(r"\s+", " ", m["kind"]).strip().title()
+                    # MTGGoldfish tournament slug, from the event's own name: legacy-challenge-32-2026-10-30
+                    slug_kind = kind
+                    if kind == "Legacy Challenge" and d >= date(2024, 6, 1):
+                        slug_kind = "Legacy Challenge 32"   # sizes are in MTGO names since spring 2024; a few sheets omit it
+                    slug = re.sub(r"[^a-z0-9]+", "-", slug_kind.lower()).strip("-") + "-" + d.isoformat()
                     if kind == "Legacy Challenge":
                         kind = "Legacy Challenge 32"   # 2023-era sheets have no size in the name
-                    out.append({"id": f["id"], "name": f["name"].strip(), "kind": kind, "date": d.isoformat()})
+                    out.append({"id": f["id"], "name": f["name"].strip(), "kind": kind, "date": d.isoformat(), "slug": slug})
     out.sort(key=lambda e: (e["date"], e["name"]))
     return out
 

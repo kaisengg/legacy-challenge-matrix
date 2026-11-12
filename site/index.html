@@ -232,7 +232,7 @@ async function fetchData() {
 async function loadData() {
   const d = await fetchData();
   const fmt = (iso) => { const [y, m, dd] = iso.split("-").map(Number); return `${m}/${dd}/${y}`; };
-  state.all = d.events.map(([id, kind, date, swiss, pf, mf]) => {
+  state.all = d.events.map(([id, kind, date, swiss, pf, mf, slug]) => {
     const players = [];
     for (let i = 0; i < pf.length; i += 6) {
       players.push({ name: d.names[pf[i]], deck: d.decks[pf[i + 1]], group: d.groups[pf[i + 2]],
@@ -241,7 +241,8 @@ async function loadData() {
     const matches = [];
     for (let i = 0; i < mf.length; i += 5) matches.push([mf[i], mf[i + 1], mf[i + 2], mf[i + 3], mf[i + 4]]);
     const k = d.kinds[kind];
-    return { id, kind: k, date, name: `${k} ${fmt(date)}`, swiss_rounds: swiss, players, matches };
+    const gf = slug || `${k.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${date}`;
+    return { id, kind: k, date, name: `${k} ${fmt(date)}`, swiss_rounds: swiss, players, matches, gf };
   });
   state.first = d.first; state.last = d.last;
   if (d.source) $("srcLink").href = d.source;
@@ -533,6 +534,9 @@ function render() {
   renderDetail();
 }
 
+// MTGGoldfish player page: spaces become "+", e.g. "Bosh N Roll" -> /player/Bosh+N+Roll
+const playerUrl = (name) => `https://www.mtggoldfish.com/player/${encodeURIComponent(name.trim()).replace(/%20/g, "+")}`;
+
 function renderDetail() {
   const box = $("detail");
   if (!state.picked || !state.agg) { box.hidden = true; return; }
@@ -558,10 +562,14 @@ function renderDetail() {
   const tb = box.querySelector("tbody"), frag = document.createDocumentFragment();
   for (const r of rows.slice(0, 1500)) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${r.ev.date}</td><td><a target="_blank" rel="noopener"></a></td><td>${r.top8 ? "Top 8" : "R" + r.rnd}</td><td></td>` +
-      `<td class="${r.mg > r.og ? "w" : r.og > r.mg ? "l" : ""}">${r.mg}-${r.og}</td><td></td>${b === "*" ? "<td></td>" : ""}`;
-    const link = tr.querySelector("a"); link.href = `https://docs.google.com/spreadsheets/d/${r.ev.id}/edit`; link.textContent = r.ev.name;
-    tr.cells[3].textContent = r.me.name; tr.cells[5].textContent = r.op.name;
+    tr.innerHTML = `<td>${r.ev.date}</td><td><a target="_blank" rel="noopener"></a></td><td>${r.top8 ? "Top 8" : "R" + r.rnd}</td><td><a target="_blank" rel="noopener"></a></td>` +
+      `<td class="${r.mg > r.og ? "w" : r.og > r.mg ? "l" : ""}">${r.mg}-${r.og}</td><td><a target="_blank" rel="noopener"></a></td>${b === "*" ? "<td></td>" : ""}`;
+    const [evLink, meLink, opLink] = tr.querySelectorAll("a");
+    evLink.href = `https://www.mtggoldfish.com/tournament/${r.ev.gf}#paper`; evLink.textContent = r.ev.name;
+    evLink.title = "Open this challenge on MTGGoldfish";
+    for (const [a, p] of [[meLink, r.me], [opLink, r.op]]) {
+      a.href = playerUrl(p.name); a.textContent = p.name; a.title = `${p.name} on MTGGoldfish`;
+    }
     if (b === "*") tr.cells[6].textContent = keyOf(r.op);
     frag.appendChild(tr);
   }

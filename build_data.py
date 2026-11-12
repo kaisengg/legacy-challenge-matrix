@@ -10,7 +10,7 @@ Sheets already in ./cache are reused, so re-running only fetches new ones
 
 Packed format (site/data.json):
   decks/groups/names/kinds : string tables
-  events[] = [sheet_id, kind_idx, "YYYY-MM-DD", swiss_rounds, players, matches]
+  events[] = [sheet_id, kind_idx, "YYYY-MM-DD", swiss_rounds, players, matches, mtggoldfish_slug]
      players = flat ints, 6 per player: name_idx, deck_idx, group_idx, wins, losses, flags
                (flags: 1 = dropped before the last Swiss round, 2 = made top 8)
      matches = flat ints, 5 per match:  round, player_a, player_b, games_a, games_b
@@ -89,7 +89,7 @@ def main():
             flags = (1 if pl["dropped"] else 0) | (2 if pl["top8"] else 0)
             players += [ix("names", pl["name"]), ix("decks", pl["deck"]), ix("groups", pl["group"]), pl["w"], pl["l"], flags]
         matches = [v for m in p["matches"] for v in m]
-        packed.append([ev["id"], ix("kinds", ev["kind"]), ev["date"], p["swiss_rounds"], players, matches])
+        packed.append([ev["id"], ix("kinds", ev["kind"]), ev["date"], p["swiss_rounds"], players, matches, ev["slug"]])
 
     data = {
         "built": datetime.now(timezone.utc).isoformat(timespec="minutes"),
