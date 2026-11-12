@@ -122,6 +122,16 @@
   .detail tr.prow:hover { background: var(--sel); }
   .detail tr.prow.sel { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
   .muted { color: var(--muted); }
+  .pbanner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; margin-bottom: 10px;
+             border-radius: 8px; background: var(--sel); border: 1px solid var(--accent); }
+  .pbanner b { font-weight: 700; }
+  .pbanner .grow { flex: 1 1 260px; min-width: 0; }
+  button.mini { min-height: 26px; padding: 2px 8px; font-size: 12px; }
+  .detail td.rounds { white-space: normal; min-width: 320px; }
+  .rounds { display: flex; flex-wrap: wrap; gap: 4px; }
+  .rd { font-size: 11px; line-height: 1.5; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); white-space: nowrap; }
+  .rd.w { border-color: rgba(var(--good), .6); background: rgba(var(--good), .12); }
+  .rd.l { border-color: rgba(var(--bad), .6); background: rgba(var(--bad), .12); }
   .w { color: rgb(var(--good)); font-weight: 600; } .l { color: rgb(var(--bad)); font-weight: 600; }
   a { color: var(--accent); }
   footer { margin-top: 22px; font-size: 12px; color: var(--muted); max-width: 90ch; }
@@ -180,6 +190,14 @@
     </div>
     <div class="row">
       <div class="fgroup">
+        <label class="f" for="playerInput">Player</label>
+        <div class="focus">
+          <input id="playerInput" list="playerList" placeholder="Type a username, e.g. Cirxi" autocomplete="off">
+          <span id="playerChip" class="focus"></span>
+        </div>
+      </div>
+      <datalist id="playerList"></datalist>
+      <div class="fgroup">
         <label class="f" for="focusInputR">Focus rows</label>
         <div class="focus">
           <input id="focusInputR" list="deckList" placeholder="Type a deck, e.g. Doomsday" autocomplete="off">
@@ -195,7 +213,7 @@
       </div>
       <datalist id="deckList"></datalist>
       <button id="focusClear" hidden>Show full matrix</button>
-      <span class="hint" id="focusHint">Pick rows, columns or both to sift out specific matchups.</span>
+      <span class="hint" id="focusHint">Pick a player, rows or columns to sift out specific matchups.</span>
     </div>
     <div class="row" id="kindsRow" hidden>
       <span class="tag">Events</span>
@@ -205,13 +223,14 @@
   </section>
 
   <section class="stats" id="stats" hidden>
-    <div class="panel stat"><div class="v" id="stEvents">0</div><div class="k">Challenges</div></div>
-    <div class="panel stat"><div class="v" id="stMatches">0</div><div class="k">Matches counted</div></div>
-    <div class="panel stat"><div class="v" id="stDecks">0</div><div class="k">Decks in range</div></div>
-    <div class="panel stat"><div class="v" id="stExcl">0</div><div class="k">Players excluded as drops</div></div>
+    <div class="panel stat"><div class="v" id="stEvents">0</div><div class="k" id="kEvents">Challenges</div></div>
+    <div class="panel stat"><div class="v" id="stMatches">0</div><div class="k" id="kMatches">Matches counted</div></div>
+    <div class="panel stat"><div class="v" id="stDecks">0</div><div class="k" id="kDecks">Decks in range</div></div>
+    <div class="panel stat"><div class="v" id="stExcl">0</div><div class="k" id="kExcl">Players excluded as drops</div></div>
   </section>
 
   <section class="panel" id="matrixPanel">
+    <div class="pbanner" id="playerBanner" hidden></div>
     <div class="row" style="justify-content:space-between;align-items:center">
       <div class="legend"><span>0%</span><span class="bar"></span><span>100%</span>
         <span>Grey = fewer matches than the minimum. Striped = mirror. Click a header to highlight it, a cell to list its matches.</span></div>
@@ -221,6 +240,7 @@
   </section>
 
   <section class="panel detail" id="detail" hidden></section>
+  <section class="panel detail" id="playerLog" hidden></section>
 
   <footer id="footer">
     Data: the community-maintained Legacy Challenge sheets in the
@@ -273,6 +293,9 @@ async function loadData() {
     const gf = slug || `${k.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${date}`;
     return { id, kind: k, date, name: `${k} ${fmt(date)}`, swiss_rounds: swiss, players, matches, gf };
   });
+  const seen = new Map();
+  for (const ev of state.all) for (const pl of ev.players) seen.set(pl.name, (seen.get(pl.name) || 0) + 1);
+  playerNames = [...seen].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
   state.first = d.first; state.last = d.last;
   if (d.source) $("srcLink").href = d.source;
   const b = new Date(d.built);
@@ -401,6 +424,7 @@ function aggregate() {
   const cell = (a, b) => { const k = a + "\u0000" + b; let c = cells.get(k); if (!c) cells.set(k, c = { w: 0, l: 0, d: 0, list: [] }); return c; };
   const deck = (k) => { let d = decks.get(k); if (!d) decks.set(k, d = { entries: 0, w: 0, l: 0, d: 0 }); return d; };
   const keyOf = (p) => (level === "deck" ? p.deck : p.group) || "Unknown";
+  if (state.player) return aggregatePlayer(state.player, { cells, decks, cell, deck, keyOf, unitGame, top8 });
   for (const ev of state.events) {
     if (kindsOff.has(ev.kind)) continue;
     events++;
@@ -429,6 +453,35 @@ function aggregate() {
     }
   }
   return { cells, decks, matches, excl, events, entries, keyOf };
+}
+// One player's matches only: rows = decks they piloted, columns = decks they faced.
+// Their own drops and unlabelled opponents are always kept so the record is complete.
+function aggregatePlayer(name, { cells, decks, cell, deck, keyOf, unitGame, top8 }) {
+  const opps = new Map();
+  const opp = (k) => { let d = opps.get(k); if (!d) opps.set(k, d = { entries: 0, w: 0, l: 0, d: 0 }); return d; };
+  let matches = 0, events = 0, entries = 0, top8s = 0;
+  for (const ev of state.events) {
+    if (kindsOff.has(ev.kind)) continue;
+    const me = ev.players.findIndex((p) => p.name === name);
+    if (me < 0) continue;
+    events++; entries++;
+    const P = ev.players[me], A = keyOf(P);
+    deck(A).entries++;
+    if (P.top8) top8s++;
+    for (const [rnd, ia, ib, ga, gb] of ev.matches) {
+      if (ia !== me && ib !== me) continue;
+      if (!top8 && rnd > ev.swiss_rounds) continue;
+      const o = ia === me ? ib : ia, mg = ia === me ? ga : gb, og = ia === me ? gb : ga;
+      const B = keyOf(ev.players[o]);
+      matches++;
+      let aw, al, ad;
+      if (unitGame) { aw = mg; al = og; ad = 0; } else { aw = mg > og ? 1 : 0; al = og > mg ? 1 : 0; ad = mg === og ? 1 : 0; }
+      const c = cell(A, B); c.w += aw; c.l += al; c.d += ad; c.list.push({ ev, rnd, a: me, b: o, ga: mg, gb: og });
+      const dA = deck(A); dA.w += aw; dA.l += al; dA.d += ad;
+      const dB = opp(B); dB.entries++; dB.w += aw; dB.l += al; dB.d += ad;
+    }
+  }
+  return { cells, decks, opps, matches, excl: 0, events, entries, top8s, keyOf, player: name };
 }
 const pct = (w, l) => (w + l ? w / (w + l) : NaN);
 function wilson(w, n) {
@@ -493,22 +546,73 @@ $("focusClear").onclick = () => {
 // Deck and archetype-group names differ, so a grouping change clears both focus lists.
 $("level").addEventListener("change", () => { if (state.focusR.length || state.focusC.length) $("focusClear").onclick(); });
 
+/* ---------- player ---------- */
+let playerNames = [];               // [name, challenges] across all data, most active first
+state.player = typeof store.get("lmm-player") === "string" ? store.get("lmm-player") : null;
+function suggestPlayers() {
+  const q = $("playerInput").value.trim().toLowerCase(), dl = $("playerList");
+  dl.innerHTML = "";
+  if (q.length < 2) return;           // 4,000+ names: only suggest once there is something to match
+  let n = 0;
+  for (const [name, c] of playerNames) {
+    if (!name.toLowerCase().includes(q)) continue;
+    const o = document.createElement("option"); o.value = name; o.label = `${c} challenges`; dl.appendChild(o);
+    if (++n >= 30) break;
+  }
+}
+function setPlayer(name) {
+  state.player = name; store.set("lmm-player", name);
+  state.picked = null; state.hlRow = state.hlCol = null; render();
+}
+function addPlayerFromInput() {
+  const input = $("playerInput"), v = input.value.trim().toLowerCase();
+  if (!v) return;
+  const hit = playerNames.find(([n]) => n.toLowerCase() === v);
+  if (!hit) return;
+  input.value = ""; $("playerList").innerHTML = "";
+  setPlayer(hit[0]);
+}
+$("playerInput").addEventListener("input", suggestPlayers);
+$("playerInput").addEventListener("change", addPlayerFromInput);
+$("playerInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addPlayerFromInput(); } });
+function renderPlayerChip() {
+  const box = $("playerChip"); box.innerHTML = "";
+  if (!state.player) return;
+  const chip = document.createElement("span"); chip.className = "chip";
+  const label = document.createElement("span"); label.textContent = state.player;
+  const x = document.createElement("button"); x.textContent = "×"; x.setAttribute("aria-label", `Stop showing only ${state.player}`);
+  x.onclick = () => setPlayer(null);
+  chip.append(label, x); box.appendChild(chip);
+}
+function renderPlayerBanner(agg) {
+  const b = $("playerBanner");
+  if (!state.player) { b.hidden = true; return; }
+  b.hidden = false;
+  b.innerHTML = `<span class="grow">Showing only <b></b>’s matches. Rows are the decks they piloted, columns the decks they faced.
+    Every cell counts from 1 match; the drop filter does not apply. <a target="_blank" rel="noopener">MTGGoldfish profile</a></span>
+    <button id="playerExit">Back to the metagame</button>`;
+  b.querySelector("b").textContent = state.player;
+  const a = b.querySelector("a"); a.href = playerUrl(state.player);
+  $("playerExit").onclick = () => setPlayer(null);
+}
+
 /* ---------- render ---------- */
 function render() {
-  const agg = state.agg = aggregate();
-  const minN = Math.max(1, +$("minN").value || 1), topN = +$("topN").value;
-  const all = [...agg.decks.entries()].map(([name, d]) => ({ name, ...d, wr: pct(d.w, d.l) }));
-  all.sort((a, b) => b.entries - a.entries || a.name.localeCompare(b.name));
+  const agg = state.agg = aggregate(), P = agg.player || null;
+  const minN = P ? 1 : Math.max(1, +$("minN").value || 1), topN = +$("topN").value;
+  const toList = (m) => [...m.entries()].map(([name, d]) => ({ name, ...d, wr: pct(d.w, d.l) }))
+    .sort((a, b) => b.entries - a.entries || a.name.localeCompare(b.name));
+  const all = toList(agg.decks), oppAll = P ? toList(agg.opps) : all;
   const sort = $("sort").value;
   const sorter = (arr) => {
     if (sort === "wr") arr.sort((a, b) => (isNaN(b.wr) ? -1 : b.wr) - (isNaN(a.wr) ? -1 : a.wr));
     if (sort === "name") arr.sort((a, b) => a.name.localeCompare(b.name));
     return arr;
   };
-  updateDeckList(all);
-  const byName = new Map(all.map((d) => [d.name, d]));
+  updateDeckList(P ? [...all, ...oppAll.filter((o) => !agg.decks.has(o.name))] : all);
+  const byName = new Map(all.map((d) => [d.name, d])), byOpp = new Map(oppAll.map((d) => [d.name, d]));
   const fR = state.focusR.filter((n) => byName.has(n));
-  const fC = state.focusC.filter((n) => byName.has(n));
+  const fC = state.focusC.filter((n) => byOpp.has(n));
   // Every deck that played at least one counted match against any of `names`.
   const facedBy = (names) => {
     const s = new Set(names);
@@ -516,7 +620,12 @@ function render() {
     return all.filter((d) => s.has(d.name));
   };
   let list, cols;
-  if (fR.length && fC.length) {          // just the chosen matchups
+  if (P) {                               // player's decks vs the decks they faced
+    list = fR.length ? fR.map((n) => byName.get(n)) : sorter(all.slice());
+    const rows = list.map((d) => d.name);
+    cols = fC.length ? fC.map((n) => byOpp.get(n))
+      : sorter(oppAll.filter((o) => rows.some((r) => agg.cells.has(r + "\u0000" + o.name))).slice(0, topN));
+  } else if (fR.length && fC.length) {          // just the chosen matchups
     list = fR.map((n) => byName.get(n));
     cols = fC.map((n) => byName.get(n));
   } else if (fR.length) {                // chosen rows vs everything they faced
@@ -531,34 +640,47 @@ function render() {
   }
   state.list = list; state.cols = cols;
   renderChips("R", fR); renderChips("C", fC);
+  renderPlayerChip(); renderPlayerBanner(agg);
+  $("focusHint").hidden = !!P || state.focusR.length + state.focusC.length > 0;
 
   $("stats").hidden = false;
   $("stEvents").textContent = agg.events.toLocaleString();
   $("stMatches").textContent = agg.matches.toLocaleString();
   $("stDecks").textContent = agg.decks.size.toLocaleString();
-  $("stExcl").textContent = agg.excl.toLocaleString();
+  $("stExcl").textContent = (P ? agg.top8s : agg.excl).toLocaleString();
+  $("kEvents").textContent = P ? "Challenges played" : "Challenges";
+  $("kMatches").textContent = P ? "Matches played" : "Matches counted";
+  $("kDecks").textContent = P ? "Decks piloted" : "Decks in range";
+  $("kExcl").textContent = P ? "Top 8s" : "Players excluded as drops";
   $("status").classList.remove("err");
-  $("status").textContent = agg.events
-    ? `${agg.events} challenges from ${$("start").value} to ${$("end").value}.`
+  const range = `from ${$("start").value} to ${$("end").value}`;
+  $("status").textContent = P
+    ? (agg.events ? `${P}: ${agg.events} challenges ${range}.` : `${P} has no challenges ${range}. Widen the dates or pick another player.`)
+    : agg.events ? `${agg.events} challenges ${range}.`
     : "No challenges in this range. Widen the dates or turn an event type back on.";
+  renderPlayerLog(agg);
 
   const good = css("--good"), bad = css("--bad");
   const unit = $("unit").value === "game" ? "games" : "matches";
   const t = $("matrix");
   if (!list.length) { t.innerHTML = `<tbody><tr><td class="loading" style="width:auto">Nothing to show for these filters.</td></tr></tbody>`; renderDetail(); return; }
-  let html = `<thead><tr><th class="corner">Row vs column →</th><th class="col tot" title="Win % against every other deck, mirrors excluded"><span>Overall (non-mirror)</span></th>`;
+  let html = `<thead><tr><th class="corner">${P ? "Their deck vs opponent →" : "Row vs column →"}</th>` +
+    (P ? `<th class="col tot" title="The player's record on this deck, mirrors included"><span>Overall</span></th>`
+       : `<th class="col tot" title="Win % against every other deck, mirrors excluded"><span>Overall (non-mirror)</span></th>`);
   cols.forEach((d, j) => html += `<th class="col${state.hlCol === d.name ? " hl" : ""}" data-j="${j}"><span></span></th>`);
   html += `</tr></thead><tbody>`;
   list.forEach((r, i) => {
     const share = agg.entries ? (r.entries / agg.entries * 100).toFixed(1) : "0";
+    const totTip = P ? `${r.name}: ${r.w}-${r.l} ${unit}, played in ${r.entries} of ${agg.events} challenges (${share}%)`
+                     : `${r.name}: ${r.w}-${r.l} non-mirror ${unit}, ${share}% of players`;
     html += `<tr class="${state.hlRow === r.name ? "hl" : ""}"><th class="rowh" data-i="${i}"></th>`;
     const totPicked = state.picked && state.picked[0] === r.name && state.picked[1] === "*" ? " picked" : "";
-    html += `<td class="tot${totPicked}" data-i="${i}" data-tot="1" title="${esc(r.name)}: ${r.w}-${r.l} non-mirror ${unit}, ${share}% of players. Click for every match and the per-player table.">${isNaN(r.wr) ? "–" : (r.wr * 100).toFixed(1) + "%"}<div class="n">${(r.w + r.l).toLocaleString()} · ${share}%</div></td>`;
+    html += `<td class="tot${totPicked}" data-i="${i}" data-tot="1" title="${esc(totTip)}. Click for every match and the per-player table.">${isNaN(r.wr) ? "–" : (r.wr * 100).toFixed(1) + "%"}<div class="n">${(r.w + r.l).toLocaleString()} · ${P ? `${r.entries} ev` : `${share}%`}</div></td>`;
     cols.forEach((c, j) => {
       const s = agg.cells.get(r.name + "\u0000" + c.name), n = s ? s.w + s.l : 0;
       const picked = state.picked && state.picked[0] === r.name && state.picked[1] === c.name ? " picked" : "";
       const hlc = state.hlCol === c.name ? " hlc" : "";
-      if (r.name === c.name) {
+      if (r.name === c.name && !P) {
         html += `<td class="mirror${hlc}${picked}" data-i="${i}" data-j="${j}" title="${esc(r.name)} mirror: ${s ? s.list.length : 0} matches"><span class="n">${s ? s.list.length : ""}</span></td>`;
         return;
       }
@@ -573,11 +695,11 @@ function render() {
   });
   t.innerHTML = html + `</tbody>`;
   t.querySelectorAll("thead th.col[data-j]").forEach((th) => {
-    const d = cols[+th.dataset.j]; th.querySelector("span").textContent = d.name; th.title = `${d.name}: ${d.entries} players`;
+    const d = cols[+th.dataset.j]; th.querySelector("span").textContent = d.name; th.title = `${d.name}: ${d.entries} ${P ? "matches faced" : "players"}`;
     th.onclick = () => { state.hlCol = state.hlCol === d.name ? null : d.name; render(); };
   });
   t.querySelectorAll("th.rowh").forEach((th) => {
-    const d = list[+th.dataset.i]; th.textContent = d.name; th.title = `${d.name}: ${d.entries} players`;
+    const d = list[+th.dataset.i]; th.textContent = d.name; th.title = `${d.name}: ${d.entries} ${P ? "challenges" : "players"}`;
     th.onclick = () => { state.hlRow = state.hlRow === d.name ? null : d.name; render(); };
   });
   t.querySelectorAll("td[data-j]").forEach((td) => td.onclick = () => {
@@ -597,14 +719,16 @@ const playerUrl = (name) => `https://www.mtggoldfish.com/player/${encodeURICompo
 function renderDetail() {
   const box = $("detail");
   if (!state.picked || !state.agg) { box.hidden = true; return; }
-  const [a, b] = state.picked, agg = state.agg, keyOf = agg.keyOf;
+  const [a, b] = state.picked, agg = state.agg, keyOf = agg.keyOf, P = agg.player || null;
+  const mirror = a === b && !P;          // in player mode a "mirror" is just another matchup
+  const pv = P ? "op" : "me";            // whose name the side table lists
   let refs = [];
-  if (b === "*") { for (const [k, s] of agg.cells) if (k.startsWith(a + "\u0000") && k !== a + "\u0000" + a) refs.push(...s.list); }
+  if (b === "*") { for (const [k, s] of agg.cells) if (k.startsWith(a + "\u0000") && (P || k !== a + "\u0000" + a)) refs.push(...s.list); }
   else { const s = agg.cells.get(a + "\u0000" + b); if (s) refs = s.list; }
   if (!refs.length) { box.hidden = true; return; }
   let w = 0, l = 0, gw = 0, gl = 0;
   const rows = refs.map((r) => {
-    const flip = r.flip || (a !== b && keyOf(r.ev.players[r.a]) !== a);
+    const flip = !P && (r.flip || (a !== b && keyOf(r.ev.players[r.a]) !== a));
     const me = r.ev.players[flip ? r.b : r.a], op = r.ev.players[flip ? r.a : r.b];
     const mg = flip ? r.gb : r.ga, og = flip ? r.ga : r.gb;
     gw += mg; gl += og; if (mg > og) w++; else if (og > mg) l++;
@@ -613,20 +737,21 @@ function renderDetail() {
   const [lo, hi] = wilson(w, w + l);
 
   // Per-pilot records. In a mirror both players piloted the deck, so count each side.
-  const sides = a === b
+  const sides = mirror
     ? rows.flatMap((r) => [r, { ...r, me: r.op, op: r.me, mg: r.og, og: r.mg }])
     : rows;
   const pilots = new Map();
   for (const r of sides) {
-    let p = pilots.get(r.me.name);
-    if (!p) pilots.set(r.me.name, p = { name: r.me.name, w: 0, l: 0, d: 0, gw: 0, gl: 0, events: new Set() });
+    const who = r[pv].name;
+    let p = pilots.get(who);
+    if (!p) pilots.set(who, p = { name: who, w: 0, l: 0, d: 0, gw: 0, gl: 0, events: new Set() });
     if (r.mg > r.og) p.w++; else if (r.og > r.mg) p.l++; else p.d++;
     p.gw += r.mg; p.gl += r.og; p.events.add(r.ev.id);
   }
   const pilotList = [...pilots.values()].sort((x, y) => (y.w + y.l + y.d) - (x.w + x.l + x.d) || y.w - x.w || x.name.localeCompare(y.name));
 
   // Keep the player filter while the same cell stays open; reset it for a new cell.
-  const key = a + "\u0000" + b;
+  const key = (P || "") + "\u0000" + a + "\u0000" + b;
   if (state.detailKey !== key) { state.detailKey = key; state.dq = ""; state.dp = null; }
   if (state.dp && !pilots.has(state.dp)) state.dp = null;
 
@@ -634,18 +759,19 @@ function renderDetail() {
   box.innerHTML = `<h2></h2><p class="muted" style="margin:0 0 12px"></p>
     <div class="dgrid">
       <div class="dcol">
-        <div class="dhead"><h3>By player</h3>
+        <div class="dhead"><h3>${P ? "By opponent" : "By player"}</h3>
           <input type="search" id="pilotSearch" placeholder="Filter by username" autocomplete="off" aria-label="Filter players by username"></div>
-        <div class="scroll"><table class="pilots"><thead><tr><th>Player</th><th class="num">Matches</th><th class="num">Win %</th><th class="num">Games</th><th class="num">Events</th></tr></thead><tbody></tbody></table></div>
-        <p class="hint" style="margin:6px 0 0">Click a player to show only their matches.</p>
+        <div class="scroll"><table class="pilots"><thead><tr><th>${P ? "Opponent" : "Player"}</th><th class="num">${P ? `${esc(P)}’s record` : "Matches"}</th><th class="num">Win %</th><th class="num">Games</th><th class="num">Events</th><th></th></tr></thead><tbody></tbody></table></div>
+        <p class="hint" style="margin:6px 0 0">Click a row to show only those matches. ▦ shows that player’s own matrix.</p>
       </div>
       <div class="dcol">
         <div class="dhead"><h3 id="matchHead">Matches</h3><button id="pilotClear" hidden>Show all players</button></div>
         <div class="scroll"><table class="mlist"><thead><tr><th>Date</th><th>Event</th><th>Round</th><th>Player</th><th>Result</th><th>Opponent</th>${b === "*" ? "<th>Opp. deck</th>" : ""}</tr></thead><tbody></tbody></table></div>
       </div>
     </div>`;
-  box.querySelector("h2").textContent = b === "*" ? `${a} vs the field` : a === b ? `${a} mirror` : `${a} vs ${b}`;
-  box.querySelector("p").textContent = a === b ? `${rows.length} mirror matches` :
+  const on = P ? `${P} on ` : "";
+  box.querySelector("h2").textContent = b === "*" ? `${on}${a} vs the field` : mirror ? `${a} mirror` : `${on}${a} vs ${b}`;
+  box.querySelector("p").textContent = mirror ? `${rows.length} mirror matches` :
     `Matches ${w}-${l} (${(pct(w, l) * 100).toFixed(1)}%), 95% CI ${(lo * 100).toFixed(0)}–${(hi * 100).toFixed(0)}%. Games ${gw}-${gl} (${(pct(gw, gl) * 100).toFixed(1)}%).`;
 
   const search = box.querySelector("#pilotSearch");
@@ -664,25 +790,28 @@ function renderDetail() {
       tr.className = "prow" + (state.dp === p.name ? " sel" : "");
       tr.tabIndex = 0;
       tr.innerHTML = `<td><a target="_blank" rel="noopener"></a></td><td class="num">${p.w}-${p.l}${p.d ? "-" + p.d : ""}</td>` +
-        `<td class="num">${isNaN(pct(p.w, p.l)) ? "–" : (pct(p.w, p.l) * 100).toFixed(0) + "%"}</td><td class="num">${p.gw}-${p.gl}</td><td class="num">${p.events.size}</td>`;
+        `<td class="num">${isNaN(pct(p.w, p.l)) ? "–" : (pct(p.w, p.l) * 100).toFixed(0) + "%"}</td><td class="num">${p.gw}-${p.gl}</td><td class="num">${p.events.size}</td>` +
+        `<td><button class="mini" aria-label="Show only ${esc(p.name)}'s matches" title="Show only ${esc(p.name)}'s matches">▦</button></td>`;
       link(tr.querySelector("a"), p);
       tr.querySelector("a").onclick = (e) => e.stopPropagation();
+      tr.querySelector("button").onclick = (e) => { e.stopPropagation(); setPlayer(p.name); $("matrixPanel").scrollIntoView({ behavior: "smooth", block: "start" }); };
       const pick = () => { state.dp = state.dp === p.name ? null : p.name; fill(); };
       tr.onclick = pick;
       tr.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
       ptb.appendChild(tr);
     }
-    if (!shown.length) ptb.innerHTML = `<tr><td colspan="5" class="muted">No player matches “${esc(state.dq)}”.</td></tr>`;
+    if (!shown.length) ptb.innerHTML = `<tr><td colspan="6" class="muted">No player matches “${esc(state.dq)}”.</td></tr>`;
 
     // Match list: the selected player, else everyone matching the search
-    const inList = (r) => state.dp ? (r.me.name === state.dp || (a === b && r.op.name === state.dp))
-                                   : (matchesQ(r.me.name) || (a === b && matchesQ(r.op.name)));
-    const list = rows.filter(inList).map((r) => (a === b && state.dp && r.op.name === state.dp)
+    const inList = (r) => state.dp ? (r[pv].name === state.dp || (mirror && r.op.name === state.dp))
+                                   : (matchesQ(r[pv].name) || (mirror && matchesQ(r.op.name)));
+    const list = rows.filter(inList).map((r) => (mirror && state.dp && r.op.name === state.dp)
       ? { ...r, me: r.op, op: r.me, mg: r.og, og: r.mg } : r);
     const head = box.querySelector("#matchHead");
     if (state.dp) {
       const p = pilots.get(state.dp);
-      head.textContent = `${state.dp}: ${p.w}-${p.l}${p.d ? "-" + p.d : ""} in matches, ${p.gw}-${p.gl} in games`;
+      head.textContent = P ? `${P} vs ${state.dp}: ${p.w}-${p.l}${p.d ? "-" + p.d : ""} in matches, ${p.gw}-${p.gl} in games`
+                           : `${state.dp}: ${p.w}-${p.l}${p.d ? "-" + p.d : ""} in matches, ${p.gw}-${p.gl} in games`;
     } else head.textContent = q ? `Matches (${list.length} for “${state.dq}”)` : `Matches (${list.length})`;
     box.querySelector("#pilotClear").hidden = !state.dp;
 
@@ -706,6 +835,45 @@ function renderDetail() {
   search.oninput = () => { state.dq = search.value; state.dp = null; fill(); };
   box.querySelector("#pilotClear").onclick = () => { state.dp = null; fill(); };
   fill();
+}
+
+function renderPlayerLog(agg) {
+  const box = $("playerLog"), P = agg.player;
+  if (!P) { box.hidden = true; return; }
+  const keyOf = agg.keyOf, rows = [];
+  for (const ev of state.events) {
+    if (kindsOff.has(ev.kind)) continue;
+    const me = ev.players.findIndex((p) => p.name === P);
+    if (me >= 0) rows.push({ ev, me, p: ev.players[me] });
+  }
+  rows.sort((x, y) => y.ev.date.localeCompare(x.ev.date));
+  if (!rows.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = `<h2></h2><p class="muted" style="margin:0 0 12px">Every round, newest first. Hover a round to see the opponent and score.</p>
+    <div class="scroll" style="max-height:520px"><table><thead><tr><th>Date</th><th>Event</th><th>Deck</th><th>Record</th><th>Rounds</th></tr></thead><tbody></tbody></table></div>`;
+  box.querySelector("h2").textContent = `${P}’s challenges (${rows.length})`;
+  const tb = box.querySelector("tbody"), frag = document.createDocumentFragment();
+  for (const { ev, me, p } of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${ev.date}</td><td><a target="_blank" rel="noopener"></a></td><td></td>` +
+      `<td>${p.w}-${p.l}${p.top8 ? ` <span class="w">Top 8</span>` : p.dropped ? ` <span class="muted">dropped</span>` : ""}</td><td class="rounds"><div class="rounds"></div></td>`;
+    const a = tr.querySelector("a"); a.href = `https://www.mtggoldfish.com/tournament/${ev.gf}#paper`; a.textContent = ev.name;
+    tr.cells[2].textContent = keyOf(p);
+    const box2 = tr.querySelector("div.rounds");
+    const mine = ev.matches.filter(([, ia, ib]) => ia === me || ib === me).sort((x, y) => x[0] - y[0]);
+    for (const [rnd, ia, ib, ga, gb] of mine) {
+      const o = ia === me ? ib : ia, mg = ia === me ? ga : gb, og = ia === me ? gb : ga, op = ev.players[o];
+      const res = mg > og ? "W" : og > mg ? "L" : "D";
+      const chip = document.createElement("span");
+      chip.className = "rd" + (res === "W" ? " w" : res === "L" ? " l" : "");
+      chip.textContent = `${rnd > ev.swiss_rounds ? "T8" : "R" + rnd} ${res} ${keyOf(op)}`;
+      chip.title = `${rnd > ev.swiss_rounds ? "Top 8" : "Round " + rnd}: ${res === "W" ? "won" : res === "L" ? "lost" : "drew"} ${mg}-${og} vs ${op.name} (${keyOf(op)})`;
+      box2.appendChild(chip);
+    }
+    if (!mine.length) box2.innerHTML = `<span class="muted">No rounds entered</span>`;
+    frag.appendChild(tr);
+  }
+  tb.appendChild(frag);
 }
 
 $("csv").onclick = async () => {
