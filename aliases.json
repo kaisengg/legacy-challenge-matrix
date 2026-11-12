@@ -1,0 +1,6 @@
+{
+  "_help": "Merge deck names that changed over time. Left = name as written in the sheets (case-insensitive), right = name to show. Edit while the server runs, then press 'Load data' again (refresh the page first so already-loaded sheets are re-read).",
+  "aliases": {
+    "Omni-Tell": "Omni-Show"
+  }
+}

@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Legacy Matchup Matrix</title>
+<style>
+  :root {
+    --bg: #f5f4f0; --panel: #ffffff; --ink: #1c1b19; --muted: #6a675f; --line: #e2dfd7;
+    --accent: #2f5bd3; --accent-ink: #fff; --sel: rgba(47, 91, 211, .14);
+    --good: 22, 140, 110; --bad: 205, 70, 50; --empty: #f0eee9; --err: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141518; --panel: #1d1f23; --ink: #eceae5; --muted: #9b988f; --line: #32353b;
+      --accent: #7c9cff; --accent-ink: #0c0d10; --sel: rgba(124, 156, 255, .18);
+      --good: 52, 190, 150; --bad: 240, 105, 85; --empty: #24262b; --err: #ff7b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1500px; margin: 0 auto; padding: 22px 16px 60px; }
+  h1 { font-size: 22px; margin: 0 0 2px; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px 18px; align-items: flex-end; }
+  .row + .row { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
+  input, select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+                  border-radius: 6px; padding: 5px 8px; min-height: 32px; }
+  input[type=number] { width: 72px; }
+  .chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; min-height: 32px; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 6px; padding: 6px 14px; min-height: 32px;
+           background: var(--accent); color: var(--accent-ink); cursor: pointer; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); font-weight: 500; padding: 5px 10px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+  .slider { position: relative; width: min(420px, 100%); height: 32px; }
+  .slider input[type=range] { position: absolute; inset: 0; width: 100%; background: none; border: 0; padding: 0;
+                              pointer-events: none; -webkit-appearance: none; appearance: none; height: 32px; }
+  .slider input[type=range]::-webkit-slider-thumb { pointer-events: auto; -webkit-appearance: none; width: 16px; height: 16px;
+                              border-radius: 50%; background: var(--accent); cursor: pointer; position: relative; z-index: 2; }
+  .slider input[type=range]::-moz-range-thumb { pointer-events: auto; width: 16px; height: 16px; border: 0; border-radius: 50%;
+                              background: var(--accent); cursor: pointer; }
+  .slider .track { position: absolute; left: 8px; right: 8px; top: 14px; height: 4px; border-radius: 2px; background: var(--line); }
+  .slider .fill { position: absolute; top: 14px; height: 4px; border-radius: 2px; background: var(--accent); }
+  .slider-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); width: min(420px, 100%); }
+  .status { margin-top: 10px; font-size: 13px; color: var(--muted); min-height: 19px; }
+  .status.err { color: var(--err); }
+  progress { width: 100%; height: 5px; accent-color: var(--accent); }
+  .kinds { display: flex; gap: 4px 14px; flex-wrap: wrap; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 14px 0; }
+  .stat .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat .k { color: var(--muted); font-size: 12px; }
+  .legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .legend .bar { width: 160px; height: 10px; border-radius: 3px;
+                 background: linear-gradient(90deg, rgb(var(--bad)), var(--empty), rgb(var(--good))); }
+  .mwrap { overflow: auto; max-height: 78vh; border: 1px solid var(--line); border-radius: 8px; margin-top: 10px; background: var(--panel); }
+  table.m { border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; font-size: 12px; }
+  table.m th, table.m td { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  table.m thead th { position: sticky; top: 0; z-index: 2; background: var(--panel); vertical-align: bottom; padding: 6px 2px; }
+  table.m thead th.col { cursor: pointer; }
+  table.m thead th.col span { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; display: inline-block;
+                              max-height: 170px; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+  table.m th.rowh { position: sticky; left: 0; z-index: 1; background: var(--panel); text-align: left; padding: 4px 8px;
+                    white-space: nowrap; font-weight: 600; cursor: pointer; max-width: 230px; overflow: hidden; text-overflow: ellipsis; }
+  table.m thead th.corner { left: 0; z-index: 3; text-align: left; padding: 6px 8px; font-weight: 500; color: var(--muted); min-width: 170px; }
+  table.m td { width: 50px; min-width: 50px; height: 34px; text-align: center; padding: 0 2px; cursor: pointer; line-height: 1.1; }
+  table.m td .p { font-weight: 650; }
+  table.m td .n { font-size: 10px; opacity: .75; }
+  table.m td.thin { color: var(--muted); background: var(--empty); }
+  table.m td.none { background: var(--empty); cursor: default; }
+  table.m td.mirror { background: repeating-linear-gradient(45deg, var(--empty), var(--empty) 4px, transparent 4px, transparent 8px); }
+  table.m td.tot, table.m th.tot { background: var(--panel); font-weight: 600; }
+  table.m td.tot { min-width: 66px; }
+  table.m .hl th.rowh, table.m th.col.hl { color: var(--accent); }
+  table.m tr.hl td:not(.tot), table.m td.hlc { box-shadow: inset 0 0 0 999px var(--sel); }
+  table.m td.picked { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .detail { margin-top: 14px; }
+  .detail h2 { font-size: 15px; margin: 0 0 4px; }
+  .detail table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .detail th, .detail td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  .detail th { color: var(--muted); font-size: 12px; font-weight: 600; }
+  .detail .scroll { max-height: 360px; overflow: auto; }
+  .muted { color: var(--muted); }
+  .w { color: rgb(var(--good)); font-weight: 600; } .l { color: rgb(var(--bad)); font-weight: 600; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Legacy Matchup Matrix</h1>
+  <p class="sub">Head-to-head results from the Legacy Challenge sheets (Match Up Input + Input tabs). Each cell is the row deck’s win rate against the column deck.</p>
+
+  <section class="panel">
+    <div class="row">
+      <label class="f">From <input type="date" id="start"></label>
+      <label class="f">To <input type="date" id="end"></label>
+      <div>
+        <div class="slider" id="slider">
+          <div class="track"></div><div class="fill" id="fill"></div>
+          <input type="range" id="rA" aria-label="Range start month">
+          <input type="range" id="rB" aria-label="Range end month">
+        </div>
+        <div class="slider-labels"><span id="sMin"></span><span id="sMax"></span></div>
+      </div>
+      <div class="presets">
+        <button class="ghost" data-m="1">1M</button>
+        <button class="ghost" data-m="3">3M</button>
+        <button class="ghost" data-m="6">6M</button>
+        <button class="ghost" data-m="12">1Y</button>
+        <button class="ghost" data-y="2025">2025</button>
+        <button class="ghost" data-y="2024">2024</button>
+        <button class="ghost" data-y="2023">2023</button>
+        <button class="ghost" data-all>All</button>
+      </div>
+      <button id="go">Load data</button>
+    </div>
+    <progress id="prog" value="0" max="1" hidden></progress>
+    <div class="status" id="status">Default range is the past 3 months. Press “Load data”. Sheets you have loaded before come from the local cache.</div>
+
+    <div class="row">
+      <label class="f">Group by
+        <select id="level"><option value="deck">Deck (sub-archetype)</option><option value="group">Archetype group</option></select>
+      </label>
+      <label class="f">Count
+        <select id="unit"><option value="match">Match win %</option><option value="game">Game win %</option></select>
+      </label>
+      <label class="f">Drops
+        <select id="drops">
+          <option value="keep">Keep all players</option>
+          <option value="02" selected>Exclude 0-2 drops</option>
+          <option value="winless">Exclude winless drops (0-1, 0-2, 0-3…)</option>
+          <option value="all">Exclude every early drop</option>
+        </select>
+      </label>
+      <label class="f">Decks shown
+        <select id="topN"><option>10</option><option>15</option><option selected>20</option><option>30</option><option>40</option><option value="9999">All</option></select>
+      </label>
+      <label class="f">Sort by
+        <select id="sort"><option value="share">Meta share</option><option value="wr">Overall win %</option><option value="name">Name</option></select>
+      </label>
+      <label class="f">Min. matches per cell <input type="number" id="minN" min="1" value="5"></label>
+      <span class="chk"><input type="checkbox" id="top8" checked><label for="top8">Include top 8</label></span>
+      <span class="chk"><input type="checkbox" id="unknown"><label for="unknown">Include “Unknown” decks</label></span>
+    </div>
+    <div class="row" id="kindsRow" hidden>
+      <span class="muted" style="font-size:12px;font-weight:600">Events</span>
+      <div class="kinds" id="kinds"></div>
+    </div>
+  </section>
+
+  <section class="stats" id="stats" hidden>
+    <div class="panel stat"><div class="v" id="stEvents">0</div><div class="k">Events</div></div>
+    <div class="panel stat"><div class="v" id="stMatches">0</div><div class="k">Matches counted</div></div>
+    <div class="panel stat"><div class="v" id="stDecks">0</div><div class="k">Decks in range</div></div>
+    <div class="panel stat"><div class="v" id="stExcl">0</div><div class="k">Players excluded (drops)</div></div>
+  </section>
+
+  <section class="panel" id="matrixPanel" hidden>
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div class="legend"><span>0%</span><span class="bar"></span><span>100%</span>
+        <span>· faded = fewer than the minimum matches · striped = mirror · click a header to highlight, a cell for its matches</span></div>
+      <button class="ghost" id="csv">Export matrix CSV</button>
+    </div>
+    <div class="mwrap"><table class="m" id="matrix"></table></div>
+  </section>
+
+  <section class="panel detail" id="detail" hidden></section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const MIN_DATE = "2023-01-01";
+const today = new Date();
+const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+const state = { cache: new Map(), events: [], hlRow: null, hlCol: null, picked: null, agg: null };
+
+/* ---------------- date range ---------------- */
+const monthList = [];
+for (let y = 2023, m = 0; y < today.getFullYear() || (y === today.getFullYear() && m <= today.getMonth()); m++) {
+  if (m === 12) { m = 0; y++; }
+  monthList.push([y, m]);
+}
+const mLabel = ([y, m]) => new Date(y, m, 1).toLocaleString(undefined, { month: "short", year: "numeric" });
+["rA", "rB"].forEach((id) => { $(id).min = 0; $(id).max = monthList.length - 1; $(id).step = 1; });
+$("sMin").textContent = mLabel(monthList[0]); $("sMax").textContent = mLabel(monthList.at(-1));
+$("start").min = $("end").min = MIN_DATE; $("start").max = $("end").max = iso(today);
+
+function monthIndexOf(dstr) {
+  const [y, m] = dstr.split("-").map(Number);
+  return Math.max(0, Math.min(monthList.length - 1, (y - 2023) * 12 + (m - 1)));
+}
+function syncSlider() {
+  const a = monthIndexOf($("start").value || MIN_DATE), b = monthIndexOf($("end").value || iso(today));
+  $("rA").value = a; $("rB").value = b;
+  const n = monthList.length - 1 || 1;
+  $("fill").style.left = `calc(8px + (100% - 16px) * ${Math.min(a, b) / n})`;
+  $("fill").style.width = `calc((100% - 16px) * ${Math.abs(b - a) / n})`;
+}
+function setRange(s, e) {
+  $("start").value = s < MIN_DATE ? MIN_DATE : s; $("end").value = e; syncSlider();
+}
+function onSlide() {
+  let a = +$("rA").value, b = +$("rB").value;
+  if (a > b) [a, b] = [b, a];
+  const [ya, ma] = monthList[a], [yb, mb] = monthList[b];
+  const end = new Date(yb, mb + 1, 0);
+  setRange(iso(new Date(ya, ma, 1)), iso(end > today ? today : end));
+}
+$("rA").oninput = $("rB").oninput = onSlide;
+$("start").onchange = $("end").onchange = syncSlider;
+document.querySelectorAll("[data-m]").forEach((b) => b.onclick = () => {
+  const s = new Date(today); s.setMonth(s.getMonth() - +b.dataset.m); setRange(iso(s), iso(today));
+});
+document.querySelectorAll("[data-y]").forEach((b) => b.onclick = () => setRange(`${b.dataset.y}-01-01`, `${b.dataset.y}-12-31`));
+document.querySelector("[data-all]").onclick = () => setRange(MIN_DATE, iso(today));
+
+/* ---------------- settings persistence ---------------- */
+const OPTS = ["level", "unit", "drops", "topN", "sort", "minN", "top8", "unknown"];
+function saveSettings() {
+  try {
+    const o = { start: $("start").value, end: $("end").value };
+    OPTS.forEach((k) => o[k] = $(k).type === "checkbox" ? $(k).checked : $(k).value);
+    localStorage.setItem("lmm-settings", JSON.stringify(o));
+  } catch {}
+}
+(function loadSettings() {
+  const s = new Date(today); s.setMonth(s.getMonth() - 3);
+  setRange(iso(s), iso(today));  // default: past 3 months
+  try {
+    const o = JSON.parse(localStorage.getItem("lmm-settings") || "null");
+    if (!o) return;
+    OPTS.forEach((k) => { if (k in o) $(k).type === "checkbox" ? ($(k).checked = o[k]) : ($(k).value = o[k]); });
+  } catch {}
+})();
+OPTS.forEach((k) => $(k).addEventListener("change", () => { saveSettings(); if (state.events.length) render(); }));
+
+/* ---------------- loading ---------------- */
+function status(msg, err = false) { $("status").textContent = msg; $("status").classList.toggle("err", err); }
+async function getJSON(url) {
+  const r = await fetch(url); const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+$("go").onclick = async () => {
+  const start = $("start").value, end = $("end").value;
+  if (!start || !end || start > end) return status("Choose a valid date range.", true);
+  saveSettings();
+  $("go").disabled = true;
+  const prog = $("prog");
+  try {
+    status("Reading the Drive folders…");
+    const { events } = await getJSON(`/api/events?start=${start}&end=${end}`);
+    if (!events.length) { status("No challenge sheets found in that range."); state.events = []; render(); return; }
+    const todo = events.filter((e) => !state.cache.has(e.id));
+    const fresh = todo.filter((e) => !e.cached).length;
+    prog.hidden = false; prog.max = events.length; prog.value = events.length - todo.length;
+    const failed = [];
+    let i = 0;
+    async function worker() {
+      while (i < todo.length) {
+        const ev = todo[i++];
+        try { state.cache.set(ev.id, await getJSON(`/api/event?id=${encodeURIComponent(ev.id)}`)); }
+        catch (e) { failed.push(`${ev.name}: ${e.message}`); }
+        prog.value++;
+        status(`Loading sheets… ${prog.value}/${events.length}` + (fresh ? ` (${fresh} new from Google Drive)` : ""));
+      }
+    }
+    await Promise.all(Array.from({ length: 4 }, worker));
+    // Google occasionally times out on a big sheet: give failures one more, unhurried pass.
+    const retry = todo.filter((e) => !state.cache.has(e.id));
+    if (retry.length) {
+      failed.length = 0;
+      for (const [n, ev] of retry.entries()) {
+        status(`Retrying ${retry.length} sheet${retry.length === 1 ? "" : "s"} that timed out… (${n + 1}/${retry.length})`);
+        try { state.cache.set(ev.id, await getJSON(`/api/event?id=${encodeURIComponent(ev.id)}`)); }
+        catch (e) { failed.push(`${ev.name}: ${e.message}`); }
+      }
+    }
+    state.events = events.map((e) => state.cache.get(e.id)).filter(Boolean);
+    const empty = state.events.filter((e) => !e.has_data).length;
+    status(`Loaded ${state.events.length} sheet${state.events.length === 1 ? "" : "s"}, ${start} to ${end}.` +
+      (empty ? ` ${empty} had no match data yet.` : "") +
+      (failed.length ? ` ${failed.length} not loaded (left out of the matrix): ${failed.slice(0, 3).join("; ")}${failed.length > 3 ? "…" : ""}. Press “Load data” again to retry just those.` : ""),
+      failed.length > 0);
+    buildKinds();
+    render();
+  } catch (e) {
+    status(`Failed: ${e.message}`, true);
+  } finally {
+    $("go").disabled = false; prog.hidden = true;
+  }
+};
+
+function buildKinds() {
+  const kinds = [...new Set(state.events.map((e) => e.kind))].sort();
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("lmm-kinds") || "{}"); } catch {}
+  $("kinds").innerHTML = "";
+  for (const k of kinds) {
+    const n = state.events.filter((e) => e.kind === k).length;
+    const id = "k_" + k.replace(/\W/g, "");
+    const span = document.createElement("span"); span.className = "chk";
+    span.innerHTML = `<input type="checkbox" id="${id}"><label for="${id}"></label>`;
+    span.querySelector("label").textContent = `${k} (${n})`;
+    const cb = span.querySelector("input"); cb.checked = saved[k] !== false; cb.dataset.kind = k;
+    cb.onchange = () => {
+      saved[k] = cb.checked;
+      try { localStorage.setItem("lmm-kinds", JSON.stringify(saved)); } catch {}
+      render();
+    };
+    $("kinds").appendChild(span);
+  }
+  $("kindsRow").hidden = kinds.length < 2;
+}
+
+/* ---------------- aggregation ---------------- */
+function excluded(p, mode) {
+  if (mode === "keep" || !p.dropped) return false;
+  if (mode === "02") return p.w === 0 && p.l === 2;
+  if (mode === "winless") return p.w === 0;
+  return true;
+}
+
+function aggregate() {
+  const level = $("level").value, unitGame = $("unit").value === "game", mode = $("drops").value;
+  const top8 = $("top8").checked, unknown = $("unknown").checked;
+  const kindsOn = new Set([...document.querySelectorAll("#kinds input")].filter((c) => c.checked).map((c) => c.dataset.kind));
+  const cells = new Map();        // "A\u0000B" -> stats for A vs B
+  const decks = new Map();        // deck -> { entries, w, l, d (non-mirror) }
+  let matches = 0, excl = 0, events = 0, entries = 0;
+  const cell = (a, b) => {
+    const k = a + "\u0000" + b;
+    let c = cells.get(k);
+    if (!c) cells.set(k, c = { w: 0, l: 0, d: 0, list: [] });
+    return c;
+  };
+  for (const ev of state.events) {
+    if (kindsOn.size && !kindsOn.has(ev.kind)) continue;
+    events++;
+    const keyOf = (p) => (level === "deck" ? p.deck : p.group) || "Unknown";
+    const out = ev.players.map((p) => excluded(p, mode));
+    excl += out.filter(Boolean).length;
+    ev.players.forEach((p, i) => {
+      if (out[i]) return;
+      const k = keyOf(p);
+      if (!unknown && k === "Unknown") return;
+      const d = decks.get(k) || { entries: 0, w: 0, l: 0, d: 0 };
+      d.entries++; entries++; decks.set(k, d);
+    });
+    for (const [rnd, ia, ib, ga, gb] of ev.matches) {
+      if (out[ia] || out[ib]) continue;
+      if (!top8 && rnd > ev.swiss_rounds) continue;
+      const A = keyOf(ev.players[ia]), B = keyOf(ev.players[ib]);
+      if (!unknown && (A === "Unknown" || B === "Unknown")) continue;
+      matches++;
+      const ref = { ev, rnd, a: ia, b: ib, ga, gb };
+      let aw, al, ad;
+      if (unitGame) { aw = ga; al = gb; ad = 0; }
+      else { aw = ga > gb ? 1 : 0; al = gb > ga ? 1 : 0; ad = ga === gb ? 1 : 0; }
+      const cAB = cell(A, B); cAB.w += aw; cAB.l += al; cAB.d += ad; cAB.list.push(ref);
+      if (A !== B) {
+        const cBA = cell(B, A); cBA.w += al; cBA.l += aw; cBA.d += ad; cBA.list.push({ ...ref, flip: true });
+        for (const [k, w, l] of [[A, aw, al], [B, al, aw]]) {
+          const d = decks.get(k) || { entries: 0, w: 0, l: 0, d: 0 };
+          d.w += w; d.l += l; d.d += ad; decks.set(k, d);
+        }
+      } else {
+        cAB.w += al; cAB.l += aw;  // mirror: both sides count, always 50%
+      }
+    }
+  }
+  return { cells, decks, matches, excl, events, entries };
+}
+
+const pct = (w, l) => (w + l ? w / (w + l) : NaN);
+function wilson(w, n) {
+  if (!n) return [NaN, NaN];
+  const z = 1.96, p = w / n, d = 1 + z * z / n;
+  const c = p + z * z / (2 * n), r = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n));
+  return [(c - r) / d, (c + r) / d];
+}
+function cssRGB(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+/* ---------------- render ---------------- */
+function render() {
+  const agg = state.agg = aggregate();
+  const minN = Math.max(1, +$("minN").value || 1);
+  const topN = +$("topN").value;
+  let list = [...agg.decks.entries()].map(([name, d]) => ({ name, ...d, wr: pct(d.w, d.l) }));
+  list.sort((a, b) => b.entries - a.entries || a.name.localeCompare(b.name));
+  list = list.slice(0, topN);
+  const sort = $("sort").value;
+  if (sort === "wr") list.sort((a, b) => (isNaN(b.wr) ? -1 : b.wr) - (isNaN(a.wr) ? -1 : a.wr));
+  if (sort === "name") list.sort((a, b) => a.name.localeCompare(b.name));
+
+  $("stats").hidden = $("matrixPanel").hidden = false;
+  $("stEvents").textContent = agg.events;
+  $("stMatches").textContent = agg.matches.toLocaleString();
+  $("stDecks").textContent = agg.decks.size;
+  $("stExcl").textContent = agg.excl;
+
+  const good = cssRGB("--good"), bad = cssRGB("--bad");
+  const unit = $("unit").value === "game" ? "games" : "matches";
+  const t = $("matrix");
+  let html = `<thead><tr><th class="corner">Row vs column →</th>`;
+  html += `<th class="col tot" title="Overall win % against every other deck (mirrors excluded)"><span>Overall (non-mirror)</span></th>`;
+  list.forEach((d, j) => html += `<th class="col${state.hlCol === d.name ? " hl" : ""}" data-j="${j}" title=""><span></span></th>`);
+  html += `</tr></thead><tbody>`;
+  list.forEach((r, i) => {
+    const share = agg.entries ? (r.entries / agg.entries * 100).toFixed(1) : "0";
+    html += `<tr class="${state.hlRow === r.name ? "hl" : ""}"><th class="rowh" data-i="${i}" title=""></th>`;
+    html += `<td class="tot" data-i="${i}" data-tot="1">${isNaN(r.wr) ? "–" : (r.wr * 100).toFixed(1) + "%"}<div class="n">${r.w + r.l} · ${share}%</div></td>`;
+    list.forEach((c, j) => {
+      const s = agg.cells.get(r.name + "\u0000" + c.name);
+      const n = s ? s.w + s.l : 0;
+      const isPicked = state.picked && state.picked[0] === r.name && state.picked[1] === c.name;
+      const hlc = state.hlCol === c.name ? " hlc" : "";
+      if (r.name === c.name) {
+        html += `<td class="mirror${hlc}${isPicked ? " picked" : ""}" data-i="${i}" data-j="${j}" title="${esc(r.name)} mirror: ${s ? s.list.length : 0} matches"><span class="n">${s ? s.list.length : ""}</span></td>`;
+        return;
+      }
+      if (!n) { html += `<td class="none${hlc}" title="${esc(r.name)} vs ${esc(c.name)}: no ${unit}"></td>`; return; }
+      const p = s.w / n, thin = n < minN;
+      const strength = Math.min(1, Math.abs(p - .5) * 2.2);
+      const bg = thin ? "" : `background: rgba(${p >= .5 ? good : bad}, ${(0.12 + 0.68 * strength).toFixed(3)})`;
+      const [lo, hi] = wilson(s.w, n);
+      const tip = `${r.name} vs ${c.name}: ${s.w}-${s.l}${s.d ? "-" + s.d : ""} ${unit} (${(p * 100).toFixed(1)}%), 95% CI ${(lo * 100).toFixed(0)}–${(hi * 100).toFixed(0)}%`;
+      html += `<td class="${thin ? "thin" : ""}${hlc}${isPicked ? " picked" : ""}" style="${bg}" data-i="${i}" data-j="${j}" title="${esc(tip)}">` +
+              `<div class="p">${Math.round(p * 100)}</div><div class="n">${n}</div></td>`;
+    });
+    html += `</tr>`;
+  });
+  html += `</tbody>`;
+  t.innerHTML = html;
+  // names as textContent (safe)
+  t.querySelectorAll("thead th.col[data-j]").forEach((th) => {
+    const d = list[+th.dataset.j]; th.querySelector("span").textContent = d.name; th.title = d.name;
+    th.onclick = () => { state.hlCol = state.hlCol === d.name ? null : d.name; render(); };
+  });
+  t.querySelectorAll("th.rowh").forEach((th) => {
+    const d = list[+th.dataset.i]; th.textContent = d.name; th.title = `${d.name}: ${d.entries} players`;
+    th.onclick = () => { state.hlRow = state.hlRow === d.name ? null : d.name; render(); };
+  });
+  t.querySelectorAll("td[data-j]").forEach((td) => td.onclick = () => {
+    const a = list[+td.dataset.i].name, b = list[+td.dataset.j].name;
+    state.picked = state.picked && state.picked[0] === a && state.picked[1] === b ? null : [a, b];
+    render();
+  });
+  t.querySelectorAll("td[data-tot]").forEach((td) => td.onclick = () => {
+    const a = list[+td.dataset.i].name;
+    state.picked = state.picked && state.picked[0] === a && state.picked[1] === "*" ? null : [a, "*"];
+    render();
+  });
+  state.list = list;
+  renderDetail();
+}
+
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+
+function renderDetail() {
+  const box = $("detail");
+  if (!state.picked) { box.hidden = true; return; }
+  const [a, b] = state.picked, agg = state.agg;
+  let refs = [];
+  if (b === "*") {
+    for (const [k, s] of agg.cells) if (k.startsWith(a + "\u0000") && k !== a + "\u0000" + a) refs.push(...s.list);
+  } else {
+    const s = agg.cells.get(a + "\u0000" + b); if (s) refs = s.list;
+  }
+  if (!refs.length) { box.hidden = true; return; }
+  const level = $("level").value;
+  const keyOf = (p) => (level === "deck" ? p.deck : p.group) || "Unknown";
+  let w = 0, l = 0, d = 0, gw = 0, gl = 0;
+  const rows = refs.map((r) => {
+    const flip = r.flip || (a === b ? false : keyOf(r.ev.players[r.a]) !== a);
+    const me = r.ev.players[flip ? r.b : r.a], op = r.ev.players[flip ? r.a : r.b];
+    const mg = flip ? r.gb : r.ga, og = flip ? r.ga : r.gb;
+    gw += mg; gl += og;
+    if (mg > og) w++; else if (og > mg) l++; else d++;
+    return { date: r.ev.date, ev: r.ev, rnd: r.rnd, top8: r.rnd > r.ev.swiss_rounds, me, op, mg, og };
+  }).sort((x, y) => y.date.localeCompare(x.date) || y.rnd - x.rnd);
+  const mw = a === b ? "—" : `${w}-${l}${d ? "-" + d : ""} (${(pct(w, l) * 100).toFixed(1)}%)`;
+  const [lo, hi] = wilson(w, w + l);
+  box.hidden = false;
+  box.innerHTML = `<h2></h2><p class="muted" style="margin:0 0 10px">Matches ${mw}` +
+    (a === b ? "" : ` · 95% CI ${(lo * 100).toFixed(0)}–${(hi * 100).toFixed(0)}% · Games ${gw}-${gl} (${(pct(gw, gl) * 100).toFixed(1)}%)`) +
+    `</p><div class="scroll"><table><thead><tr><th>Date</th><th>Event</th><th>Round</th><th>Player</th><th>Result</th><th>Opponent</th>` +
+    (b === "*" ? "<th>Opp. deck</th>" : "") + `</tr></thead><tbody></tbody></table></div>`;
+  box.querySelector("h2").textContent = b === "*" ? `${a} vs the field` : a === b ? `${a} mirror` : `${a} vs ${b}`;
+  const tb = box.querySelector("tbody");
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${r.date}</td><td><a target="_blank" rel="noopener"></a></td><td>${r.top8 ? "Top 8" : "R" + r.rnd}</td>` +
+      `<td></td><td class="${r.mg > r.og ? "w" : r.og > r.mg ? "l" : ""}">${r.mg}-${r.og}</td><td></td>` + (b === "*" ? "<td></td>" : "");
+    const link = tr.querySelector("a");
+    link.href = `https://docs.google.com/spreadsheets/d/${r.ev.id}/edit`; link.textContent = r.ev.name;
+    tr.cells[3].textContent = r.me.name; tr.cells[5].textContent = r.op.name;
+    if (b === "*") tr.cells[6].textContent = keyOf(r.op);
+    tb.appendChild(tr);
+  }
+}
+
+$("csv").onclick = () => {
+  if (!state.list) return;
+  const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
+  const names = state.list.map((d) => d.name);
+  const lines = [["deck", "entries", "overall_w", "overall_l", ...names.flatMap((n) => [`${n} W`, `${n} L`])].map(q).join(",")];
+  for (const r of state.list) {
+    const cells = names.flatMap((n) => { const s = state.agg.cells.get(r.name + "\u0000" + n); return s && n !== r.name ? [s.w, s.l] : ["", ""]; });
+    lines.push([r.name, r.entries, r.w, r.l, ...cells].map(q).join(","));
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
+  a.download = `legacy-matchups_${$("start").value}_${$("end").value}_${$("unit").value}.csv`;
+  a.click();
+};
+</script>
+</body>
+</html>
