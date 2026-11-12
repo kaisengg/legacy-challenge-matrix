@@ -64,6 +64,7 @@
   .kinds { display: flex; gap: 2px 14px; flex-wrap: wrap; }
   .focus { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; }
   .focus input { width: 220px; max-width: 100%; }
+  .fgroup { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; border-radius: 999px;
           background: var(--sel); color: var(--ink); font-size: 13px; font-weight: 600; min-height: 30px; }
   .chip button { border: 0; min-height: 24px; padding: 0 7px; border-radius: 999px; color: var(--muted); font-size: 15px; line-height: 1; }
@@ -169,14 +170,23 @@
       <span class="chk"><input type="checkbox" id="unknown"><label for="unknown">Include unlabelled decks</label></span>
     </div>
     <div class="row">
-      <label class="f" for="focusInput">Focus rows</label>
-      <div class="focus">
-        <input id="focusInput" list="deckList" placeholder="Type a deck, e.g. Doomsday" autocomplete="off">
-        <datalist id="deckList"></datalist>
-        <span id="chips" class="focus"></span>
-        <button id="focusClear" hidden>Show full matrix</button>
-        <span class="hint" id="focusHint">Pick decks to see them against every archetype they faced.</span>
+      <div class="fgroup">
+        <label class="f" for="focusInputR">Focus rows</label>
+        <div class="focus">
+          <input id="focusInputR" list="deckList" placeholder="Type a deck, e.g. Doomsday" autocomplete="off">
+          <span id="chipsR" class="focus"></span>
+        </div>
       </div>
+      <div class="fgroup">
+        <label class="f" for="focusInputC">Focus columns</label>
+        <div class="focus">
+          <input id="focusInputC" list="deckList" placeholder="Type a deck, e.g. Dimir Tempo" autocomplete="off">
+          <span id="chipsC" class="focus"></span>
+        </div>
+      </div>
+      <datalist id="deckList"></datalist>
+      <button id="focusClear" hidden>Show full matrix</button>
+      <span class="hint" id="focusHint">Pick rows, columns or both to sift out specific matchups.</span>
     </div>
     <div class="row" id="kindsRow" hidden>
       <span class="tag">Events</span>
@@ -420,8 +430,14 @@ function wilson(w, n) {
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-/* ---------- focus rows ---------- */
-state.focus = (store.get("lmm-focus") || []).filter((x) => typeof x === "string");
+/* ---------- focus rows / columns ---------- */
+const strings = (v) => (Array.isArray(v) ? v : []).filter((x) => typeof x === "string");
+const FOCUS = {
+  R: { key: "lmm-focus", noun: "row" },
+  C: { key: "lmm-focus-cols", noun: "column" },
+};
+state.focusR = strings(store.get(FOCUS.R.key));
+state.focusC = strings(store.get(FOCUS.C.key));
 let deckListKey = "";
 function updateDeckList(all) {
   const key = all.map((d) => d.name).join("|");
@@ -430,32 +446,43 @@ function updateDeckList(all) {
   const dl = $("deckList"); dl.innerHTML = "";
   for (const d of all) { const o = document.createElement("option"); o.value = d.name; o.label = `${d.entries} players`; dl.appendChild(o); }
 }
-function setFocus(list) { state.focus = list; store.set("lmm-focus", list); state.picked = null; render(); }
-function renderChips(active) {
-  const box = $("chips"); box.innerHTML = "";
-  for (const n of state.focus) {
+function setFocus(side, list) {
+  state["focus" + side] = list; store.set(FOCUS[side].key, list); state.picked = null; render();
+}
+function renderChips(side, active) {
+  const box = $("chips" + side); box.innerHTML = "";
+  for (const n of state["focus" + side]) {
     const chip = document.createElement("span"); chip.className = "chip";
     const label = document.createElement("span"); label.textContent = n;
     if (!active.includes(n)) { label.style.opacity = ".5"; chip.title = "No matches for this deck in the current range or grouping"; }
-    const x = document.createElement("button"); x.textContent = "×"; x.setAttribute("aria-label", `Remove ${n}`);
-    x.onclick = () => setFocus(state.focus.filter((f) => f !== n));
+    const x = document.createElement("button"); x.textContent = "×"; x.setAttribute("aria-label", `Remove ${n} from focus ${FOCUS[side].noun}s`);
+    x.onclick = () => setFocus(side, state["focus" + side].filter((f) => f !== n));
     chip.append(label, x); box.appendChild(chip);
   }
-  $("focusClear").hidden = !state.focus.length;
-  $("focusHint").hidden = !!state.focus.length;
+  const any = state.focusR.length + state.focusC.length > 0;
+  $("focusClear").hidden = !any;
+  $("focusHint").hidden = any;
 }
-function addFocusFromInput() {
-  const v = $("focusInput").value.trim();
+function addFocusFromInput(side) {
+  const input = $("focusInput" + side), v = input.value.trim();
   if (!v) return;
   const match = [...$("deckList").options].map((o) => o.value).find((n) => n.toLowerCase() === v.toLowerCase());
   if (!match) return;
-  $("focusInput").value = "";
-  if (!state.focus.includes(match)) setFocus([...state.focus, match]);
+  input.value = "";
+  const cur = state["focus" + side];
+  if (!cur.includes(match)) setFocus(side, [...cur, match]);
 }
-$("focusInput").addEventListener("change", addFocusFromInput);
-$("focusInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addFocusFromInput(); } });
-$("focusClear").onclick = () => setFocus([]);
-$("level").addEventListener("change", () => { if (state.focus.length) setFocus([]); });
+for (const side of ["R", "C"]) {
+  const input = $("focusInput" + side);
+  input.addEventListener("change", () => addFocusFromInput(side));
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addFocusFromInput(side); } });
+}
+$("focusClear").onclick = () => {
+  state.focusR = []; state.focusC = []; store.set(FOCUS.R.key, []); store.set(FOCUS.C.key, []);
+  state.picked = null; render();
+};
+// Deck and archetype-group names differ, so a grouping change clears both focus lists.
+$("level").addEventListener("change", () => { if (state.focusR.length || state.focusC.length) $("focusClear").onclick(); });
 
 /* ---------- render ---------- */
 function render() {
@@ -471,20 +498,30 @@ function render() {
   };
   updateDeckList(all);
   const byName = new Map(all.map((d) => [d.name, d]));
-  const focus = state.focus.filter((n) => byName.has(n));
+  const fR = state.focusR.filter((n) => byName.has(n));
+  const fC = state.focusC.filter((n) => byName.has(n));
+  // Every deck that played at least one counted match against any of `names`.
+  const facedBy = (names) => {
+    const s = new Set(names);
+    for (const n of names) for (const d of all) if (agg.cells.has(n + "\u0000" + d.name)) s.add(d.name);
+    return all.filter((d) => s.has(d.name));
+  };
   let list, cols;
-  if (focus.length) {
-    // Focus mode: chosen decks as rows, every deck any of them faced as columns.
-    list = focus.map((n) => byName.get(n));
-    const faced = new Set();
-    for (const r of focus) for (const d of all) if (d.name !== r && agg.cells.has(r + "\u0000" + d.name)) faced.add(d.name);
-    cols = sorter(all.filter((d) => faced.has(d.name) || focus.includes(d.name)));
+  if (fR.length && fC.length) {          // just the chosen matchups
+    list = fR.map((n) => byName.get(n));
+    cols = fC.map((n) => byName.get(n));
+  } else if (fR.length) {                // chosen rows vs everything they faced
+    list = fR.map((n) => byName.get(n));
+    cols = sorter(facedBy(fR));
+  } else if (fC.length) {                // everything that faced the chosen columns
+    cols = fC.map((n) => byName.get(n));
+    list = sorter(facedBy(fC));
   } else {
     list = sorter(all.slice(0, topN));
     cols = list;
   }
   state.list = list; state.cols = cols;
-  renderChips(focus);
+  renderChips("R", fR); renderChips("C", fC);
 
   $("stats").hidden = false;
   $("stEvents").textContent = agg.events.toLocaleString();
