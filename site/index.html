@@ -8,6 +8,7 @@
     --bg: #f4f4f1; --panel: #ffffff; --ink: #1b1c1f; --muted: #66686f; --line: #dfe0e3;
     --accent: #3157c8; --accent-ink: #ffffff; --sel: rgba(49, 87, 200, .14);
     --good: 20, 136, 108; --bad: 202, 68, 48; --empty: #eeeeea; --err: #b8321f;
+    --tot: #eaeffb; --tot-hover: #d6e0fa;
     --font-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
     --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   }
@@ -16,12 +17,14 @@
       --bg: #131418; --panel: #1c1e23; --ink: #ebebee; --muted: #9a9ca4; --line: #31343b;
       --accent: #85a2ff; --accent-ink: #0d0f14; --sel: rgba(133, 162, 255, .18);
       --good: 56, 192, 152; --bad: 240, 108, 88; --empty: #23252b; --err: #ff8373; color-scheme: dark;
+      --tot: #222a3d; --tot-hover: #2d3956;
     }
   }
   :root[data-theme="dark"] {
     --bg: #131418; --panel: #1c1e23; --ink: #ebebee; --muted: #9a9ca4; --line: #31343b;
     --accent: #85a2ff; --accent-ink: #0d0f14; --sel: rgba(133, 162, 255, .18);
     --good: 56, 192, 152; --bad: 240, 108, 88; --empty: #23252b; --err: #ff8373; color-scheme: dark;
+      --tot: #222a3d; --tot-hover: #2d3956;
   }
   * { box-sizing: border-box; }
   body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-body); }
@@ -92,8 +95,14 @@
   table.m td.thin { color: var(--muted); background: var(--empty); }
   table.m td.none { background: var(--empty); cursor: default; }
   table.m td.mirror { background: repeating-linear-gradient(45deg, var(--empty), var(--empty) 4px, transparent 4px, transparent 8px); }
-  table.m td.tot, table.m th.tot { background: var(--panel); font-weight: 600; }
-  table.m td.tot { min-width: 70px; }
+  table.m td.tot, table.m th.tot { background: var(--tot); font-weight: 600; border-right: 2px solid var(--accent); }
+  table.m th.tot { cursor: default; color: var(--accent); }
+  table.m td.tot .n { white-space: nowrap; }
+  table.m td.tot { min-width: 70px;transition: background-color .12s, box-shadow .12s; }
+  table.m td.tot:hover { background: var(--tot-hover); box-shadow: inset 0 0 0 2px var(--accent); }
+  table.m td.tot:hover::after { content: "▾ details"; display: block; font-size: 9px; line-height: 1; margin-top: -2px; font-weight: 600; color: var(--accent); }
+  table.m td[data-j]:not(.none):hover { box-shadow: inset 0 0 0 2px var(--ink); }
+  table.m td.tot.picked { background: var(--tot-hover); }
   table.m tr.hl th.rowh, table.m th.col.hl { color: var(--accent); }
   table.m tr.hl td:not(.tot), table.m td.hlc { box-shadow: inset 0 0 0 999px var(--sel); }
   table.m td.picked { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -543,7 +552,8 @@ function render() {
   list.forEach((r, i) => {
     const share = agg.entries ? (r.entries / agg.entries * 100).toFixed(1) : "0";
     html += `<tr class="${state.hlRow === r.name ? "hl" : ""}"><th class="rowh" data-i="${i}"></th>`;
-    html += `<td class="tot" data-i="${i}" data-tot="1" title="${esc(r.name)}: ${r.w}-${r.l} non-mirror ${unit}, ${share}% of players">${isNaN(r.wr) ? "–" : (r.wr * 100).toFixed(1) + "%"}<div class="n">${(r.w + r.l).toLocaleString()} · ${share}%</div></td>`;
+    const totPicked = state.picked && state.picked[0] === r.name && state.picked[1] === "*" ? " picked" : "";
+    html += `<td class="tot${totPicked}" data-i="${i}" data-tot="1" title="${esc(r.name)}: ${r.w}-${r.l} non-mirror ${unit}, ${share}% of players. Click for every match and the per-player table.">${isNaN(r.wr) ? "–" : (r.wr * 100).toFixed(1) + "%"}<div class="n">${(r.w + r.l).toLocaleString()} · ${share}%</div></td>`;
     cols.forEach((c, j) => {
       const s = agg.cells.get(r.name + "\u0000" + c.name), n = s ? s.w + s.l : 0;
       const picked = state.picked && state.picked[0] === r.name && state.picked[1] === c.name ? " picked" : "";
