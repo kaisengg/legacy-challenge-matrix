@@ -17,7 +17,8 @@ Credit for the archetype labels and match entry goes to the sheets' contributors
 ### Vintage
 
 Vintage has no such sheets, so the **Vintage** toggle uses the [Videre Project](https://videreproject.com)'s
-public MTGO API ([open source](https://github.com/videre-project)) for the past 3 months of challenges.
+public MTGO API ([open source](https://github.com/videre-project)) for every challenge since January 2024
+(Videre has no round-by-round data before that).
 MTGO publishes only the top 32 decklists, so the Vintage matrix counts matches where both players finished top 32.
 Decks Videre can only label by colour (`WU`, `UBR`, ...) can be relabelled by hand in `classify.json`
 (card rules, single-decklist fixes, renames; see the `_help` notes in the file). Credit for the match data
@@ -52,7 +53,7 @@ and labels goes to the Videre Project.
 
 ```bash
 python build_data.py      # first run downloads ~650 sheets (a few minutes), later runs only new ones
-python build_videre.py vintage   # past 3 months of Vintage from Videre
+python build_videre.py vintage   # Vintage since 2024 from Videre (first run ~15 minutes)
 python build_pages.py
 python -m http.server 8770 --directory _site
 ```

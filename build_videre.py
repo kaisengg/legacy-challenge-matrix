@@ -2,8 +2,11 @@
 Build a matchup dataset for a format that has no community sheets, from the
 Videre Project's public MTGO API (https://api.videreproject.com).
 
-    python build_videre.py vintage              # past 3 months -> site/data-vintage.json
-    python build_videre.py vintage --days 180
+    python build_videre.py vintage                     # 2024-01-01 .. today -> site/data-vintage.json
+    python build_videre.py vintage --since 2025-06-01
+
+Videre lists events back to 2015, but round-by-round matches only exist from
+January 2024, so that is the default start.
 
 MTGO only publishes the top 32 decklists of a challenge, so only those players
 get a deck label. Everyone else is written with an empty deck, which the page
@@ -37,6 +40,7 @@ CACHE = ROOT / "cache" / "videre"
 CLASSIFY = ROOT / "classify.json"
 FRESH_DAYS = 4                      # events this recent are re-fetched (late imports, relabels)
 KINDS = ("Challenge", "Showcase")
+FIRST_MATCHES = "2024-01-01"        # Videre has no round data before this
 COLOURS_ONLY = re.compile(r"^(?:[WUBRG]{1,5}|[2345]c|Unknown)$", re.I)
 
 
@@ -118,13 +122,13 @@ def classify(rules: dict, deck: str, group: str, cards: dict | None, deck_key: s
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("format", help="MTGO format, e.g. vintage, modern, pauper")
-    ap.add_argument("--days", type=int, default=92)
+    ap.add_argument("--since", default=FIRST_MATCHES, help="first event date, YYYY-MM-DD")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     fmt = args.format.lower()
     t0 = time.time()
     until = date.today()
-    since = until - timedelta(days=args.days)
+    since = date.fromisoformat(args.since)
 
     events = [e for e in get_all(f"/events/{fmt}?min_date={since}&max_date={until}") if e["kind"] in KINDS]
     events.sort(key=lambda e: (e["date"], e["id"]))
