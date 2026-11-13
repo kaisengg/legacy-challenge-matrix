@@ -5,6 +5,7 @@
     "        could only label by colour (WU, UBR, 4c...). Add \"override\": true to relabel any deck.",
     "        all  = every card must be in the 75     any  = at least one of these",
     "        none = none of these may be in the 75   deck / group = the labels to use",
+    "        from = only decks Videre gave one of these labels, e.g. [\"WR\", \"WUR\"]",
     "decks:  relabel one exact decklist by its Videre deck id, e.g. \"58714313\": \"Thundertrap Tempo\"",
     "        or {\"deck\": \"Esper Tinker\", \"group\": \"Blue Tinker\"}.",
     "rename: rename a Videre label everywhere, e.g. \"Lurrus PO\": \"Paradoxical Outcome\".",
@@ -12,9 +13,146 @@
   ],
   "vintage": {
     "rules": [
-      { "deck": "Dredge", "all": ["Bazaar of Baghdad", "Ichorid"] },
-      { "deck": "Other Shops", "all": ["Mishra's Workshop"] },
-      { "deck": "Tinker (unlabelled)", "group": "Blue Tinker", "all": ["Tinker"] }
+      {
+        "deck": "Dredge",
+        "all": [
+          "Bazaar of Baghdad",
+          "Ichorid"
+        ]
+      },
+      {
+        "deck": "Other Shops",
+        "all": [
+          "Mishra's Workshop"
+        ]
+      },
+      {
+        "deck": "Tinker (unlabelled)",
+        "group": "Blue Tinker",
+        "all": [
+          "Tinker"
+        ]
+      }
+    ],
+    "decks": {},
+    "rename": {}
+  },
+  "modern": {
+    "rules": [
+      {
+        "deck": "Boros Energy",
+        "from": [
+          "WR"
+        ],
+        "all": [
+          "Galvanic Discharge"
+        ],
+        "any": [
+          "Guide of Souls",
+          "Ajani, Nacatl Pariah",
+          "Ocelot Pride"
+        ]
+      },
+      {
+        "deck": "Jeskai Energy",
+        "from": [
+          "WUR"
+        ],
+        "all": [
+          "Galvanic Discharge"
+        ],
+        "any": [
+          "Guide of Souls",
+          "Ajani, Nacatl Pariah",
+          "Ocelot Pride"
+        ]
+      },
+      {
+        "deck": "Jeskai Control",
+        "from": [
+          "WUR"
+        ],
+        "all": [
+          "Wrath of the Skies"
+        ]
+      },
+      {
+        "deck": "Azorius Control",
+        "from": [
+          "WU"
+        ],
+        "all": [
+          "Teferi, Time Raveler"
+        ],
+        "any": [
+          "Wrath of the Skies",
+          "Supreme Verdict"
+        ]
+      },
+      {
+        "deck": "Eldrazi Ramp",
+        "from": [
+          "RG",
+          "G",
+          "URG"
+        ],
+        "any": [
+          "Sowing Mycospawn",
+          "Devourer of Destiny"
+        ]
+      },
+      {
+        "deck": "Izzet Prowess",
+        "from": [
+          "UR"
+        ],
+        "all": [
+          "Cori-Steel Cutter"
+        ]
+      },
+      {
+        "deck": "Murktide Regent",
+        "from": [
+          "UR",
+          "URG",
+          "UB",
+          "UBR"
+        ],
+        "all": [
+          "Murktide Regent"
+        ]
+      },
+      {
+        "deck": "Yawgmoth",
+        "from": [
+          "BG",
+          "WBG",
+          "UBG"
+        ],
+        "all": [
+          "Yawgmoth, Thran Physician"
+        ]
+      },
+      {
+        "deck": "Orzhov Blink",
+        "from": [
+          "WB"
+        ],
+        "all": [
+          "Ephemerate",
+          "Overlord of the Balemurk"
+        ]
+      },
+      {
+        "deck": "Esper Blink",
+        "from": [
+          "WUB"
+        ],
+        "all": [
+          "Ephemerate",
+          "Overlord of the Balemurk"
+        ]
+      }
     ],
     "decks": {},
     "rename": {}

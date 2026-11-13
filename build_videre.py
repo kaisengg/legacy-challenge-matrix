@@ -18,7 +18,8 @@ archetype (e.g. "Blue Tinker"). These become the page's Deck and Archetype group
 When Videre's classifier is unsure it falls back to colours ("WU", "UBR");
 classify.json lets you relabel those by hand (see the file for the rules).
 
-Output uses the same packed format as build_data.py (see that file).
+Output uses the same packed format as build_data.py (see that file), plus an 8th
+field per event: each player's final placing (0 = unknown), in player order.
 """
 
 from __future__ import annotations
@@ -111,6 +112,8 @@ def classify(rules: dict, deck: str, group: str, cards: dict | None, deck_key: s
         for r in rules.get("rules", []):
             if not r.get("override") and not COLOURS_ONLY.match(deck or "Unknown"):
                 continue
+            if r.get("from") and deck not in r["from"]:
+                continue
             if all(cards.get(c, 0) > 0 for c in r.get("all", [])) and \
                (not r.get("any") or any(cards.get(c, 0) > 0 for c in r["any"])) and \
                not any(cards.get(c, 0) > 0 for c in r.get("none", [])):
@@ -134,7 +137,7 @@ def main():
     events.sort(key=lambda e: (e["date"], e["id"]))
     print(f"{len(events)} {fmt} challenges since {since} ({time.time() - t0:.0f}s)", flush=True)
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         raws = list(pool.map(lambda e: event_raw(fmt, e), events))
     print(f"  downloaded ({time.time() - t0:.0f}s)", flush=True)
 
@@ -178,7 +181,20 @@ def main():
                 elif gb > ga: w[b] += 1; l[a] += 1
             last_round[b] = max(last_round.get(b, 0), m["round"])
 
-        players = []
+        rank = {s["player"]: s.get("rank") or 0 for s in raw["standings"]}
+        # The official standings record is authoritative: Videre's match rows occasionally miss a round.
+        # Top-8 players keep the Swiss-only record counted above (standings include their top-8 rounds).
+        played = {}
+        for s_ in raw["standings"]:
+            n = s_["player"]
+            try:
+                sw, sl, sd = (int(x) for x in (s_.get("record") or "").split("-"))
+            except ValueError:
+                continue
+            if n in w and last_round.get(n, 0) <= swiss:
+                w[n], l[n] = sw, sl
+                played[n] = sw + sl + sd
+        players, ranks = [], []
         for n in names:
             deck, group, deck_id = label.get(n, ("", "", None))
             if deck:
@@ -190,15 +206,17 @@ def main():
                 deck, group = nd, ng
                 if COLOURS_ONLY.match(deck):
                     colour_only += 1
-            flags = (1 if last_round.get(n, 0) < swiss else 0) | (2 if last_round.get(n, 0) > swiss else 0)
+            dropped = played[n] < swiss if n in played else last_round.get(n, 0) < swiss
+            flags = (1 if dropped else 0) | (2 if last_round.get(n, 0) > swiss else 0)
             players += [ix("names", n), ix("decks", deck), ix("groups", group), w[n], l[n], flags]
+            ranks.append(rank.get(n, 0))
 
         day = ev["date"][:10]
         base = re.sub(r"[^a-z0-9]+", "-", ev["name"].lower()).strip("-") + "-" + day
         k = seen_slug.get(base, 0)
         seen_slug[base] = k + 1
         slug = base if k == 0 else f"{base}-{k}"   # MTGGoldfish: second same-day event gets "-1"
-        packed.append([str(ev["id"]), ix("kinds", ev["name"]), day, swiss, players, matches, slug])
+        packed.append([str(ev["id"]), ix("kinds", ev["name"]), day, swiss, players, matches, slug, ranks])
 
     data = {
         "built": datetime.now(timezone.utc).isoformat(timespec="minutes"),

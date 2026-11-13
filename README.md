@@ -14,12 +14,13 @@ All data comes from the community-maintained Legacy Challenge sheets in the
 
 Credit for the archetype labels and match entry goes to the sheets' contributors.
 
-### Vintage
+### Modern and Vintage
 
-Vintage has no such sheets, so the **Vintage** toggle uses the [Videre Project](https://videreproject.com)'s
+Modern and Vintage have no such sheets, so their toggles use the [Videre Project](https://videreproject.com)'s
 public MTGO API ([open source](https://github.com/videre-project)) for every challenge since January 2024
 (Videre has no round-by-round data before that).
-MTGO publishes only the top 32 decklists, so the Vintage matrix counts matches where both players finished top 32.
+MTGO publishes only the top 32 decklists, so deck-vs-deck cells count matches where both players finished top 32;
+"Overall" also counts their rounds against players outside the top 32 (shown with the opponent's placing and record).
 Decks Videre can only label by colour (`WU`, `UBR`, ...) can be relabelled by hand in `classify.json`
 (card rules, single-decklist fixes, renames; see the `_help` notes in the file). Credit for the match data
 and labels goes to the Videre Project.
@@ -30,7 +31,7 @@ and labels goes to the Videre Project.
 
 1. restores previously downloaded sheets from the Actions cache,
 2. `python build_data.py` downloads only new sheets and rewrites `site/data.json`,
-3. `python build_videre.py vintage` rebuilds `site/data-vintage.json` from Videre,
+3. `python build_videre.py vintage` and `... modern` rebuild `site/data-vintage.json` / `site/data-modern.json` from Videre,
 4. commits the refreshed data files,
 5. `python build_pages.py` wraps the page into `_site/` and deploys it to GitHub Pages.
 
@@ -44,7 +45,7 @@ and labels goes to the Videre Project.
 | `build_pages.py` | Builds the standalone `_site/` for GitHub Pages |
 | `server.py` | Drive and sheet access shared by the build; also runs a local live version (`python server.py`, then http://localhost:8765) |
 | `index.html` | The page for the local live version |
-| `site/data-vintage.json` | Same packed format for Vintage (top-32 decklists only) |
+| `site/data-vintage.json`, `site/data-modern.json` | Same packed format for Vintage / Modern (top-32 decklists only), plus final placings |
 | `build_videre.py` | Downloads a format's challenges from the Videre API and packs `site/data-<format>.json` |
 | `classify.json` | Manual labels for Videre decks that only got a colour label |
 | `aliases.json` | Merge deck names that changed over time (e.g. `"Omni-Tell": "Omni-Show"`) |
@@ -54,6 +55,7 @@ and labels goes to the Videre Project.
 ```bash
 python build_data.py      # first run downloads ~650 sheets (a few minutes), later runs only new ones
 python build_videre.py vintage   # Vintage since 2024 from Videre (first run ~15 minutes)
+python build_videre.py modern    # Modern since 2024 (first run ~40 minutes)
 python build_pages.py
 python -m http.server 8770 --directory _site
 ```

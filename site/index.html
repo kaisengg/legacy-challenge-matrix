@@ -151,6 +151,7 @@
   <div class="fmtbar" role="group" aria-label="Format">
     <span class="tag">Format</span>
     <button data-fmt="legacy">Legacy</button>
+    <button data-fmt="modern">Modern</button>
     <button data-fmt="vintage">Vintage</button>
   </div>
   <p class="srcnote" id="srcNote" hidden></p>
@@ -278,6 +279,7 @@ const store = {
 /* ---------- data ---------- */
 const FORMATS = {
   legacy:  { label: "Legacy",  file: "data.json" },
+  modern:  { label: "Modern",  file: "data-modern.json" },
   vintage: { label: "Vintage", file: "data-vintage.json" },
 };
 state.fmt = FORMATS[store.get("lmm-format")] ? store.get("lmm-format") : "legacy";
@@ -303,11 +305,11 @@ async function loadData() {
   const d = await fetchData(FORMATS[state.fmt].file);
   applyProvider(d);
   const fmt = (iso) => { const [y, m, dd] = iso.split("-").map(Number); return `${m}/${dd}/${y}`; };
-  state.all = d.events.map(([id, kind, date, swiss, pf, mf, slug]) => {
+  state.all = d.events.map(([id, kind, date, swiss, pf, mf, slug, rk]) => {
     const players = [];
     for (let i = 0; i < pf.length; i += 6) {
       players.push({ name: d.names[pf[i]], deck: d.decks[pf[i + 1]], group: d.groups[pf[i + 2]],
-                     w: pf[i + 3], l: pf[i + 4], dropped: !!(pf[i + 5] & 1), top8: !!(pf[i + 5] & 2) });
+                     w: pf[i + 3], l: pf[i + 4], dropped: !!(pf[i + 5] & 1), top8: !!(pf[i + 5] & 2), rank: rk ? rk[i / 6] : 0 });
     }
     const matches = [];
     for (let i = 0; i < mf.length; i += 5) matches.push([mf[i], mf[i + 1], mf[i + 2], mf[i + 3], mf[i + 4]]);
@@ -348,13 +350,14 @@ function applyProvider(d) {
   $("footSheets").hidden = videre;
   $("footVidere").hidden = !videre;
   $("srcNote").hidden = !videre;
-  const ex = { legacy: ["Cirxi", "Doomsday", "Dimir Tempo"], vintage: ["a username", "Jewel Shops", "Raker Shops"] }[state.fmt] || ["a username", "a deck", "a deck"];
+  const ex = { legacy: ["Cirxi", "Doomsday", "Dimir Tempo"], modern: ["a username", "Boros Energy", "Eldrazi Ramp"], vintage: ["a username", "Jewel Shops", "Raker Shops"] }[state.fmt] || ["a username", "a deck", "a deck"];
   $("playerInput").placeholder = ex[0] === "a username" ? "Type a username" : `Type a username, e.g. ${ex[0]}`;
   $("focusInputR").placeholder = `Type a deck, e.g. ${ex[1]}`;
   $("focusInputC").placeholder = `Type a deck, e.g. ${ex[2]}`;
   if (videre) {
-    $("srcNote").innerHTML = `<b>Top 32 only.</b> ${f.label} data comes from the Videre Project’s MTGO records. MTGO publishes only the top 32 decklists of each challenge, ` +
-      `so cells count matches where <b>both</b> players finished top 32, “Overall” is the record against other top-32 decks, and meta share is the share of top-32 finishes. ` +
+    $("srcNote").innerHTML = `<b>Top 32 only.</b> ${f.label} data comes from the Videre Project’s MTGO records. MTGO publishes only the top 32 decklists of each challenge (events in early 2024 published more, and those are used too), ` +
+      `so deck-vs-deck cells count matches where <b>both</b> decks are known. “Overall” counts every match a top-32 deck played, including wins and losses against players who missed the top 32 ` +
+      `(shown in the last column, “${OUTSIDE}”), so it tends to sit above 50%. Meta share is the share of top-32 finishes. ` +
       `Deck = Videre’s deck label, Archetype group = its archetype family.`;
   }
 }
@@ -477,6 +480,11 @@ function excluded(p, mode) {
   if (mode === "winless") return p.w === 0;
   return true;
 }
+const OUTSIDE = "Outside top 32";      // Videre data: opponents without a published decklist
+// Opponent without a published decklist (Videre data): show how they finished instead.
+const ordinal = (n) => n + ((n % 100 >= 11 && n % 100 <= 13) ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+const finishLabel = (p) => `– (${p.rank ? ordinal(p.rank) + " place, " : ""}${p.w}-${p.l}${p.dropped ? " drop" : ""})`;
+const deckLabel = (p, keyOf) => state.provider === "videre" && keyOf(p) === "Unknown" ? finishLabel(p) : keyOf(p);
 function aggregate() {
   const videre = state.provider === "videre";
   const level = $("level").value, unitGame = $("unit").value === "game", mode = videre ? "keep" : $("drops").value;
@@ -501,11 +509,18 @@ function aggregate() {
       if (out[ia] || out[ib]) continue;
       if (!top8 && rnd > ev.swiss_rounds) continue;
       const A = keyOf(ev.players[ia]), B = keyOf(ev.players[ib]);
-      if (!unknown && (A === "Unknown" || B === "Unknown")) continue;
+      const half = videre && (A === "Unknown") !== (B === "Unknown");   // a top-32 deck vs someone outside the top 32
+      if (!half && !unknown && (A === "Unknown" || B === "Unknown")) continue;
       matches++;
       const ref = { ev, rnd, a: ia, b: ib, ga, gb };
       let aw, al, ad;
       if (unitGame) { aw = ga; al = gb; ad = 0; } else { aw = ga > gb ? 1 : 0; al = gb > ga ? 1 : 0; ad = ga === gb ? 1 : 0; }
+      if (half) {   // counts toward the known deck's overall record, and its "Outside top 32" column
+        const flip = A === "Unknown", K = flip ? B : A, kw = flip ? al : aw, kl = flip ? aw : al;
+        const c = cell(K, OUTSIDE); c.w += kw; c.l += kl; c.d += ad; c.list.push({ ...ref, flip });
+        const dK = deck(K); dK.w += kw; dK.l += kl; dK.d += ad;
+        continue;
+      }
       const cAB = cell(A, B); cAB.w += aw; cAB.l += al; cAB.d += ad; cAB.list.push(ref);
       if (A !== B) {
         const cBA = cell(B, A); cBA.w += al; cBA.l += aw; cBA.d += ad; cBA.list.push({ ...ref, flip: true });
@@ -700,6 +715,10 @@ function render() {
     list = sorter(all.slice(0, topN));
     cols = list;
   }
+  if (!P && state.provider === "videre" && !fC.length) {
+    const n = list.reduce((t, r) => t + (agg.cells.get(r.name + "\u0000" + OUTSIDE)?.list.length || 0), 0);
+    if (n) cols = [...cols, { name: OUTSIDE, entries: n, outside: true }];
+  }
   state.list = list; state.cols = cols;
   renderChips("R", fR); renderChips("C", fC);
   renderPlayerChip(); renderPlayerBanner(agg);
@@ -729,7 +748,7 @@ function render() {
   let html = `<thead><tr><th class="corner">${P ? "Their deck vs opponent →" : "Row vs column →"}</th>` +
     (P ? `<th class="col tot" title="The player's record on this deck, mirrors included"><span>Overall</span></th>`
        : state.provider === "videre"
-         ? `<th class="col tot" title="Win % against every other top-32 deck, mirrors excluded"><span>Overall vs top 32</span></th>`
+         ? `<th class="col tot" title="Win % against every opponent, including players outside the top 32; mirrors excluded"><span>Overall (all opponents)</span></th>`
          : `<th class="col tot" title="Win % against every other deck, mirrors excluded"><span>Overall (non-mirror)</span></th>`);
   cols.forEach((d, j) => html += `<th class="col${state.hlCol === d.name ? " hl" : ""}" data-j="${j}"><span></span></th>`);
   html += `</tr></thead><tbody>`;
@@ -759,7 +778,7 @@ function render() {
   });
   t.innerHTML = html + `</tbody>`;
   t.querySelectorAll("thead th.col[data-j]").forEach((th) => {
-    const d = cols[+th.dataset.j]; th.querySelector("span").textContent = d.name; th.title = `${d.name}: ${d.entries} ${P ? "matches faced" : "players"}`;
+    const d = cols[+th.dataset.j]; th.querySelector("span").textContent = d.name; th.title = d.outside ? `${d.entries} matches against players who missed the top 32 (no published decklist)` : `${d.name}: ${d.entries} ${P ? "matches faced" : "players"}`;
     th.onclick = () => { state.hlCol = state.hlCol === d.name ? null : d.name; render(); };
   });
   t.querySelectorAll("th.rowh").forEach((th) => {
@@ -830,7 +849,7 @@ function renderDetail() {
       </div>
       <div class="dcol">
         <div class="dhead"><h3 id="matchHead">Matches</h3><button id="pilotClear" hidden>Show all players</button></div>
-        <div class="scroll"><table class="mlist"><thead><tr><th>Date</th><th>Event</th><th>Round</th><th>Player</th><th>Result</th><th>Opponent</th>${b === "*" ? "<th>Opp. deck</th>" : ""}</tr></thead><tbody></tbody></table></div>
+        <div class="scroll"><table class="mlist"><thead><tr><th>Date</th><th>Event</th><th>Round</th><th>Player</th><th>Result</th><th>Opponent</th>${b === "*" || b === OUTSIDE ? "<th>Opp. deck</th>" : ""}</tr></thead><tbody></tbody></table></div>
       </div>
     </div>`;
   const on = P ? `${P} on ` : "";
@@ -884,12 +903,12 @@ function renderDetail() {
     for (const r of list.slice(0, 1500)) {
       const tr = document.createElement("tr");
       tr.innerHTML = `<td>${r.ev.date}</td><td><a target="_blank" rel="noopener"></a></td><td>${r.top8 ? "Top 8" : "R" + r.rnd}</td><td><a target="_blank" rel="noopener"></a></td>` +
-        `<td class="${r.mg > r.og ? "w" : r.og > r.mg ? "l" : ""}">${r.mg}-${r.og}</td><td><a target="_blank" rel="noopener"></a></td>${b === "*" ? "<td></td>" : ""}`;
+        `<td class="${r.mg > r.og ? "w" : r.og > r.mg ? "l" : ""}">${r.mg}-${r.og}</td><td><a target="_blank" rel="noopener"></a></td>${b === "*" || b === OUTSIDE ? "<td></td>" : ""}`;
       const [evLink, meLink, opLink] = tr.querySelectorAll("a");
       evLink.href = `https://www.mtggoldfish.com/tournament/${r.ev.gf}#paper`; evLink.textContent = r.ev.name;
       evLink.title = "Open this challenge on MTGGoldfish";
       link(meLink, r.me); link(opLink, r.op);
-      if (b === "*") tr.cells[6].textContent = keyOf(r.op);
+      if (b === "*" || b === OUTSIDE) tr.cells[6].textContent = deckLabel(r.op, keyOf);
       frag.appendChild(tr);
     }
     tb.appendChild(frag);
@@ -930,8 +949,8 @@ function renderPlayerLog(agg) {
       const res = mg > og ? "W" : og > mg ? "L" : "D";
       const chip = document.createElement("span");
       chip.className = "rd" + (res === "W" ? " w" : res === "L" ? " l" : "");
-      chip.textContent = `${rnd > ev.swiss_rounds ? "T8" : "R" + rnd} ${res} ${keyOf(op)}`;
-      chip.title = `${rnd > ev.swiss_rounds ? "Top 8" : "Round " + rnd}: ${res === "W" ? "won" : res === "L" ? "lost" : "drew"} ${mg}-${og} vs ${op.name} (${keyOf(op)})`;
+      chip.textContent = `${rnd > ev.swiss_rounds ? "T8" : "R" + rnd} ${res} ${deckLabel(op, keyOf)}`;
+      chip.title = `${rnd > ev.swiss_rounds ? "Top 8" : "Round " + rnd}: ${res === "W" ? "won" : res === "L" ? "lost" : "drew"} ${mg}-${og} vs ${op.name} (${deckLabel(op, keyOf)})`;
       box2.appendChild(chip);
     }
     if (!mine.length) box2.innerHTML = `<span class="muted">No rounds entered</span>`;
