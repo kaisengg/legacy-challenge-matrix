@@ -145,7 +145,16 @@ def main():
     tables = {k: {} for k in ("decks", "groups", "names", "kinds")}
     ix = lambda t, v: tables[t].setdefault(v, len(tables[t]))  # noqa: E731
     packed, relabelled, colour_only = [], 0, 0
-    seen_slug: dict[str, int] = {}
+    # MTGGoldfish names same-name same-day events from the last one back: the later event keeps the
+    # plain slug and the earlier one gets "-1" (then "-2", ...). Events are ordered by Videre event id.
+    base_of = {e["id"]: re.sub(r"[^a-z0-9]+", "-", e["name"].lower()).strip("-") + "-" + e["date"][:10] for e in events}
+    same: dict[str, list] = {}
+    for e in events:
+        same.setdefault(base_of[e["id"]], []).append(e["id"])
+    slug_of = {}
+    for base, ids in same.items():
+        for k, eid in enumerate(sorted(ids, reverse=True)):
+            slug_of[eid] = base if k == 0 else f"{base}-{k}"
     for ev, raw in zip(events, raws):
         ms = [m for m in raw["matches"]]
         if not ms:
@@ -212,11 +221,7 @@ def main():
             ranks.append(rank.get(n, 0))
 
         day = ev["date"][:10]
-        base = re.sub(r"[^a-z0-9]+", "-", ev["name"].lower()).strip("-") + "-" + day
-        k = seen_slug.get(base, 0)
-        seen_slug[base] = k + 1
-        slug = base if k == 0 else f"{base}-{k}"   # MTGGoldfish: second same-day event gets "-1"
-        packed.append([str(ev["id"]), ix("kinds", ev["name"]), day, swiss, players, matches, slug, ranks])
+        packed.append([str(ev["id"]), ix("kinds", ev["name"]), day, swiss, players, matches, slug_of[ev["id"]], ranks])
 
     data = {
         "built": datetime.now(timezone.utc).isoformat(timespec="minutes"),
