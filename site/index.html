@@ -49,6 +49,11 @@
   button:hover { background: var(--sel); }
   button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+  .fmtbar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 0 0 14px; }
+  .fmtbar .tag { margin-right: 4px; }
+  .srcnote { margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel);
+             font-size: 13px; color: var(--muted); max-width: 110ch; }
+  .srcnote b { color: var(--ink); }
   .range { display: flex; flex-direction: column; gap: 2px; width: min(440px, 100%); }
   .slider { position: relative; height: 34px; }
   .slider input[type=range] { position: absolute; inset: 0; width: 100%; background: none; border: 0; padding: 0; min-height: 0;
@@ -140,8 +145,15 @@
 </style>
 
 <main>
-  <h1>Legacy Matchup Matrix</h1>
-  <p class="sub">Head-to-head results from MTGO Legacy Challenges. Each cell is the row deck’s win rate against the column deck. Pick a time frame and filters; everything updates instantly.</p>
+  <h1 id="title">Legacy Matchup Matrix</h1>
+  <p class="sub">Head-to-head results from MTGO <span id="fmtName">Legacy</span> Challenges. Each cell is the row deck’s win rate against the column deck. Pick a time frame and filters; everything updates instantly.</p>
+
+  <div class="fmtbar" role="group" aria-label="Format">
+    <span class="tag">Format</span>
+    <button data-fmt="legacy">Legacy</button>
+    <button data-fmt="vintage">Vintage</button>
+  </div>
+  <p class="srcnote" id="srcNote" hidden></p>
 
   <section class="panel" aria-label="Filters">
     <div class="row">
@@ -170,7 +182,7 @@
       <label class="f">Count
         <select id="unit"><option value="match">Match win %</option><option value="game">Game win %</option></select>
       </label>
-      <label class="f">Drops
+      <label class="f" id="dropsField">Drops
         <select id="drops">
           <option value="keep">Keep all players</option>
           <option value="02" selected>Exclude 0-2 drops</option>
@@ -186,7 +198,7 @@
       </label>
       <label class="f">Min. per cell <input type="number" id="minN" min="1" value="5"></label>
       <span class="chk"><input type="checkbox" id="top8" checked><label for="top8">Include top 8</label></span>
-      <span class="chk"><input type="checkbox" id="unknown"><label for="unknown">Include unlabelled decks</label></span>
+      <span class="chk" id="unknownField"><input type="checkbox" id="unknown"><label for="unknown">Include unlabelled decks</label></span>
     </div>
     <div class="row">
       <div class="fgroup">
@@ -243,9 +255,12 @@
   <section class="panel detail" id="playerLog" hidden></section>
 
   <footer id="footer">
-    Data: the community-maintained Legacy Challenge sheets in the
+    <span id="footSheets">Data: the community-maintained Legacy Challenge sheets in the
     <a id="srcLink" href="https://drive.google.com/drive/folders/1eX3hYT_iou09-xgrhScFvdz2ShIlS3EJ" target="_blank" rel="noopener">Public Facing Sheets</a>
-    Drive folder (Input and Match Up Input tabs). All credit for the archetype labels and match entry goes to its contributors.
+    Drive folder (Input and Match Up Input tabs). All credit for the archetype labels and match entry goes to its contributors.</span>
+    <span id="footVidere" hidden>Data: the <a href="https://videreproject.com" target="_blank" rel="noopener">Videre Project</a>
+    (<a href="https://github.com/videre-project" target="_blank" rel="noopener">open source</a>), which records MTGO tournament results and labels decklists.
+    All credit for the match data and archetype labels goes to its contributors; a few colour-only labels are corrected by hand.</span>
     <span id="built"></span>
   </footer>
 </main>
@@ -261,14 +276,20 @@ const store = {
 };
 
 /* ---------- data ---------- */
-async function fetchData() {
+const FORMATS = {
+  legacy:  { label: "Legacy",  file: "data.json" },
+  vintage: { label: "Vintage", file: "data-vintage.json" },
+};
+state.fmt = FORMATS[store.get("lmm-format")] ? store.get("lmm-format") : "legacy";
+
+async function fetchData(file) {
   // A stalled request would otherwise leave the page loading forever: time out and retry.
   let last;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 20000);
     try {
-      const r = await fetch(attempt === 1 ? "data.json" : `data.json?retry=${attempt}`, { signal: ctl.signal, cache: attempt === 1 ? "default" : "reload" });
+      const r = await fetch(attempt === 1 ? file : `${file}?retry=${attempt}`, { signal: ctl.signal, cache: attempt === 1 ? "default" : "reload" });
       if (!r.ok) throw new Error(`data file returned ${r.status}`);
       return await r.json();
     } catch (e) {
@@ -279,7 +300,8 @@ async function fetchData() {
   throw last;
 }
 async function loadData() {
-  const d = await fetchData();
+  const d = await fetchData(FORMATS[state.fmt].file);
+  applyProvider(d);
   const fmt = (iso) => { const [y, m, dd] = iso.split("-").map(Number); return `${m}/${dd}/${y}`; };
   state.all = d.events.map(([id, kind, date, swiss, pf, mf, slug]) => {
     const players = [];
@@ -297,7 +319,7 @@ async function loadData() {
   for (const ev of state.all) for (const pl of ev.players) seen.set(pl.name, (seen.get(pl.name) || 0) + 1);
   playerNames = [...seen].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
   state.first = d.first; state.last = d.last;
-  if (d.source) $("srcLink").href = d.source;
+  if (d.source && state.provider !== "videre") $("srcLink").href = d.source;
   const b = new Date(d.built);
   $("built").textContent = ` Covers ${d.first} to ${d.last}; updated ${isNaN(b) ? d.built : b.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}.`;
 }
@@ -313,7 +335,46 @@ function addMonths(iso, n) {
   const last = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
   return isoOf(t.getFullYear(), t.getMonth(), Math.min(d, last));
 }
+// Sheets data (Legacy) labels every player; Videre data only has the top 32 decklists.
+function applyProvider(d) {
+  const f = FORMATS[state.fmt];
+  state.provider = d.provider || "sheets";
+  const videre = state.provider === "videre";
+  document.title = $("title").textContent = `${f.label} Matchup Matrix`;
+  $("fmtName").textContent = f.label;
+  document.querySelectorAll("[data-fmt]").forEach((b) => b.classList.toggle("on", b.dataset.fmt === state.fmt));
+  $("dropsField").hidden = videre;
+  $("unknownField").hidden = videre;
+  $("footSheets").hidden = videre;
+  $("footVidere").hidden = !videre;
+  $("srcNote").hidden = !videre;
+  const ex = { legacy: ["Cirxi", "Doomsday", "Dimir Tempo"], vintage: ["a username", "Jewel Shops", "Raker Shops"] }[state.fmt] || ["a username", "a deck", "a deck"];
+  $("playerInput").placeholder = ex[0] === "a username" ? "Type a username" : `Type a username, e.g. ${ex[0]}`;
+  $("focusInputR").placeholder = `Type a deck, e.g. ${ex[1]}`;
+  $("focusInputC").placeholder = `Type a deck, e.g. ${ex[2]}`;
+  if (videre) {
+    $("srcNote").innerHTML = `<b>Top 32 only.</b> ${f.label} data comes from the Videre Project’s MTGO records. MTGO publishes only the top 32 decklists of each challenge, ` +
+      `so cells count matches where <b>both</b> players finished top 32, “Overall” is the record against other top-32 decks, and meta share is the share of top-32 finishes. ` +
+      `Deck = Videre’s deck label, Archetype group = its archetype family.`;
+  }
+}
+async function switchFormat(fmt) {
+  if (fmt === state.fmt || !FORMATS[fmt]) return;
+  state.fmt = fmt; store.set("lmm-format", fmt);
+  state.player = null; store.set("lmm-player", null);
+  state.focusR = []; state.focusC = []; store.set(FOCUS.R.key, []); store.set(FOCUS.C.key, []);
+  state.picked = null; state.hlRow = state.hlCol = null;
+  $("status").classList.remove("err");
+  $("status").textContent = `Loading ${FORMATS[fmt].label} match data…`;
+  document.querySelectorAll("[data-fmt]").forEach((b) => b.classList.toggle("on", b.dataset.fmt === fmt));
+  try { await boot(); }
+  catch (e) { $("status").classList.add("err"); $("status").textContent = `Could not load the match data (${e.message}). Reload the page to try again.`; }
+}
+document.querySelectorAll("[data-fmt]").forEach((b) => b.onclick = () => switchFormat(b.dataset.fmt));
+const rangeKey = () => state.fmt === "legacy" ? "lmm-range" : `lmm-range-${state.fmt}`;
+
 function setupRange() {
+  document.querySelectorAll("#presets [data-y], #presets [data-all]").forEach((b) => b.remove());
   const [fy, fm] = state.first.split("-").map(Number), [ly, lm] = state.last.split("-").map(Number);
   monthList = [];
   for (let y = fy, m = fm - 1; y < ly || (y === ly && m <= lm - 1);) {
@@ -375,7 +436,7 @@ $("start").onchange = $("end").onchange = () => setRange($("start").value || sta
 function applyRange() {
   const s = $("start").value, e = $("end").value;
   state.events = state.all.filter((ev) => ev.date >= s && ev.date <= e);
-  store.set("lmm-range", [s, e]);
+  store.set(rangeKey(), [s, e]);
   buildKinds(); render();
 }
 
@@ -417,8 +478,9 @@ function excluded(p, mode) {
   return true;
 }
 function aggregate() {
-  const level = $("level").value, unitGame = $("unit").value === "game", mode = $("drops").value;
-  const top8 = $("top8").checked, unknown = $("unknown").checked;
+  const videre = state.provider === "videre";
+  const level = $("level").value, unitGame = $("unit").value === "game", mode = videre ? "keep" : $("drops").value;
+  const top8 = $("top8").checked, unknown = !videre && $("unknown").checked;
   const cells = new Map(), decks = new Map();
   let matches = 0, excl = 0, events = 0, entries = 0;
   const cell = (a, b) => { const k = a + "\u0000" + b; let c = cells.get(k); if (!c) cells.set(k, c = { w: 0, l: 0, d: 0, list: [] }); return c; };
@@ -432,7 +494,7 @@ function aggregate() {
     ev.players.forEach((p, i) => {
       if (out[i]) { excl++; return; }
       const k = keyOf(p);
-      if (!unknown && k === "Unknown") return;
+      if (!unknown && k === "Unknown") { if (videre) excl++; return; }
       deck(k).entries++; entries++;
     });
     for (const [rnd, ia, ib, ga, gb] of ev.matches) {
@@ -651,7 +713,7 @@ function render() {
   $("kEvents").textContent = P ? "Challenges played" : "Challenges";
   $("kMatches").textContent = P ? "Matches played" : "Matches counted";
   $("kDecks").textContent = P ? "Decks piloted" : "Decks in range";
-  $("kExcl").textContent = P ? "Top 8s" : "Players excluded as drops";
+  $("kExcl").textContent = P ? "Top 8s" : state.provider === "videre" ? "Players outside the top 32" : "Players excluded as drops";
   $("status").classList.remove("err");
   const range = `from ${$("start").value} to ${$("end").value}`;
   $("status").textContent = P
@@ -666,7 +728,9 @@ function render() {
   if (!list.length) { t.innerHTML = `<tbody><tr><td class="loading" style="width:auto">Nothing to show for these filters.</td></tr></tbody>`; renderDetail(); return; }
   let html = `<thead><tr><th class="corner">${P ? "Their deck vs opponent →" : "Row vs column →"}</th>` +
     (P ? `<th class="col tot" title="The player's record on this deck, mirrors included"><span>Overall</span></th>`
-       : `<th class="col tot" title="Win % against every other deck, mirrors excluded"><span>Overall (non-mirror)</span></th>`);
+       : state.provider === "videre"
+         ? `<th class="col tot" title="Win % against every other top-32 deck, mirrors excluded"><span>Overall vs top 32</span></th>`
+         : `<th class="col tot" title="Win % against every other deck, mirrors excluded"><span>Overall (non-mirror)</span></th>`);
   cols.forEach((d, j) => html += `<th class="col${state.hlCol === d.name ? " hl" : ""}" data-j="${j}"><span></span></th>`);
   html += `</tr></thead><tbody>`;
   list.forEach((r, i) => {
@@ -892,13 +956,16 @@ $("csv").onclick = async () => {
 };
 
 /* ---------- boot ---------- */
+async function boot() {
+  await loadData();
+  setupRange();
+  const saved = store.get(rangeKey());
+  if (saved && saved[0] >= state.first && saved[1] <= state.last) setRange(saved[0], saved[1]);
+  else setRange(addMonths(state.last, -3), state.last);   // default: past 3 months
+}
 (async () => {
   try {
-    await loadData();
-    setupRange();
-    const saved = store.get("lmm-range");
-    if (saved && saved[0] >= state.first && saved[1] <= state.last) setRange(saved[0], saved[1]);
-    else setRange(addMonths(state.last, -3), state.last);   // default: past 3 months
+    await boot();
   } catch (e) {
     $("status").classList.add("err");
     $("status").textContent = `Could not load the match data (${e.message}). Reload the page to try again.`;

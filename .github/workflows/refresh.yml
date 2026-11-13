@@ -6,7 +6,7 @@ on:
   workflow_dispatch:          # "Run workflow" button on the Actions tab
   push:
     branches: [main]
-    paths: ["site/index.html", "*.py", "aliases.json", ".github/workflows/refresh.yml"]
+    paths: ["site/index.html", "*.py", "aliases.json", "classify.json", ".github/workflows/refresh.yml"]
 
 # Least privilege: nothing by default, each job asks only for what it needs.
 permissions: {}
@@ -39,6 +39,12 @@ jobs:
       - name: Download new sheets and rebuild data
         run: python -u build_data.py
 
+      # Vintage has no community sheets: top-32 data from the Videre Project's public API.
+      # If Videre is unreachable, the last committed site/data-vintage.json is deployed instead.
+      - name: Rebuild Vintage data from Videre
+        continue-on-error: true
+        run: python -u build_videre.py vintage
+
       # Saved even if a later step fails, so the next run does not start from scratch.
       - name: Save sheet cache
         if: always()
@@ -54,7 +60,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add site/data.json
+          git add site/data.json site/data-vintage.json
           if git diff --staged --quiet; then
             echo "No data changes."
             exit 0

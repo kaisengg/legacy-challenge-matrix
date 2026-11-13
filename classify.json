@@ -1,0 +1,22 @@
+{
+  "_help": [
+    "Manual labels for Videre-sourced formats (used by build_videre.py). One section per format.",
+    "rules:  checked in order; the first match wins. By default a rule only touches decks Videre",
+    "        could only label by colour (WU, UBR, 4c...). Add \"override\": true to relabel any deck.",
+    "        all  = every card must be in the 75     any  = at least one of these",
+    "        none = none of these may be in the 75   deck / group = the labels to use",
+    "decks:  relabel one exact decklist by its Videre deck id, e.g. \"58714313\": \"Thundertrap Tempo\"",
+    "        or {\"deck\": \"Esper Tinker\", \"group\": \"Blue Tinker\"}.",
+    "rename: rename a Videre label everywhere, e.g. \"Lurrus PO\": \"Paradoxical Outcome\".",
+    "After editing, run: python build_videre.py vintage"
+  ],
+  "vintage": {
+    "rules": [
+      { "deck": "Dredge", "all": ["Bazaar of Baghdad", "Ichorid"] },
+      { "deck": "Other Shops", "all": ["Mishra's Workshop"] },
+      { "deck": "Tinker (unlabelled)", "group": "Blue Tinker", "all": ["Tinker"] }
+    ],
+    "decks": {},
+    "rename": {}
+  }
+}

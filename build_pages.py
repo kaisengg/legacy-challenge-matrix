@@ -39,6 +39,8 @@ def main():
     page = (SRC / "index.html").read_text(encoding="utf-8")
     (OUT / "index.html").write_text(SKELETON.replace("{page}", page), encoding="utf-8")
     shutil.copy2(SRC / "data.json", OUT / "data.json")
+    for extra in SRC.glob("data-*.json"):          # other formats (Videre-sourced)
+        shutil.copy2(extra, OUT / extra.name)
     (OUT / ".nojekyll").write_text("", encoding="utf-8")
     print(f"Wrote {OUT}")
 
