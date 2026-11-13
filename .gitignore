@@ -1,4 +1,7 @@
-cache/
+cache/*
+!cache/videre/
+cache/videre/*
+!cache/videre/mtgo-index/
 _site/
 __pycache__/
 *.log
