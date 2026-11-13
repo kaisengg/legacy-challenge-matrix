@@ -22,7 +22,10 @@ public MTGO API ([open source](https://github.com/videre-project)) for every cha
 MTGO publishes only the top 32 decklists, so deck-vs-deck cells count matches where both players finished top 32;
 "Overall" also counts their rounds against players outside the top 32 (shown with the opponent's placing and record).
 Decks Videre can only label by colour (`WU`, `UBR`, ...) can be relabelled by hand in `classify.json`
-(card rules, single-decklist fixes, renames; see the `_help` notes in the file). Credit for the match data
+(card rules, single-decklist fixes, renames; see the `_help` notes in the file). A few events' decklists were never
+labelled by Videre; those get the label of the most similar labelled decklist from within six weeks (96% agreement
+when tested on labelled decks). Event dates and MTGGoldfish links come from mtgo.com's monthly decklist index, since
+Videre's dates are Pacific time; same-day events are ordered by event id (the second gets `-1`). Credit for the match data
 and labels goes to the Videre Project.
 
 ## How it updates

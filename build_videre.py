@@ -94,6 +94,117 @@ def event_raw(fmt: str, ev: dict) -> dict:
     return raw
 
 
+# ---------- MTGO dates and MTGGoldfish links ----------
+MTGO = "https://www.mtgo.com"
+MTGO_LINK = re.compile(r"/decklist/([a-z0-9-]+?)-(\d{4}-\d{2}-\d{2})(\d{6,})")
+
+
+def mtgo_get(url: str) -> str:
+    for wait in (0, 5, 20, 60):
+        time.sleep(wait or 0.5)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (legacy-challenge-matrix)"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.read().decode("utf-8", "replace")
+        except (urllib.error.URLError, TimeoutError):
+            pass
+    raise RuntimeError(f"giving up on {url}")
+
+
+def mtgo_month(y: int, m: int) -> dict[str, tuple[str, str]]:
+    """MTGO event id -> (event slug, date) from mtgo.com's monthly decklist index."""
+    path = CACHE / "mtgo-index" / f"{y}-{m:02d}.json"
+    done = date(y, m, 1) < (date.today().replace(day=1) - timedelta(days=1)).replace(day=1)   # older than last month
+    if done and path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    for wait in (0, 30, 90):   # mtgo.com sometimes serves a page without the list; retry, never cache it
+        time.sleep(wait)
+        out = {i: (name, d) for name, d, i in MTGO_LINK.findall(mtgo_get(f"{MTGO}/decklists/{y}/{m:02d}"))}
+        if out:
+            break
+    else:
+        raise RuntimeError("index page had no decklist links")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out), encoding="utf-8")
+    return out
+
+
+def mtgo_links(events: list[dict], previous: dict[str, tuple[str, str]]) -> tuple[dict, dict]:
+    """
+    Videre stores a Pacific-time date, so evening events land a day before MTGO's own date, which is
+    what MTGGoldfish uses. Take each event's date and name from mtgo.com's monthly index instead, and
+    order same-name same-day events by MTGO event id (ids are handed out in start-time order;
+    checked against the start times of 56 same-day pairs): the first keeps the plain MTGGoldfish slug, the
+    second gets "-1", and so on. If mtgo.com is unreachable, events keep the date and link of the
+    previous build (`previous`); only events never seen there fall back to Videre's date and name.
+    """
+    months = sorted({(int(e["date"][:4]), int(e["date"][5:7])) for e in events})
+    months = sorted(set(months) | {(y + (m == 12), m % 12 + 1) for y, m in months})   # next month too
+    index: dict[str, tuple[str, str]] = {}
+    for y, m in months:
+        if date(y, m, 1) > date.today():
+            continue
+        try:
+            index.update(mtgo_month(y, m))
+        except Exception as e:  # noqa: BLE001
+            print(f"  mtgo.com index {y}-{m:02d} unavailable ({e}); using Videre dates there", flush=True)
+    day_of, base_of, found = {}, {}, 0
+    for e in events:
+        hit = index.get(str(e["id"]))
+        if not hit and str(e["id"]) in previous:
+            day_of[e["id"]] = previous[str(e["id"])][0]
+            continue
+        if hit:
+            found += 1
+            name, day = hit
+        else:
+            name, day = re.sub(r"[^a-z0-9]+", "-", e["name"].lower()).strip("-"), e["date"][:10]
+        day_of[e["id"]], base_of[e["id"]] = day, (name, day)
+    groups: dict[tuple, list] = {}
+    for e in events:
+        if e["id"] in base_of:
+            groups.setdefault(base_of[e["id"]], []).append(e["id"])
+    slug_of = {e["id"]: previous[str(e["id"])][1] for e in events if e["id"] not in base_of}
+    for (name, day), ids in groups.items():
+        for k, eid in enumerate(sorted(ids, key=int)):
+            slug_of[eid] = f"{name}-{day}" + (f"-{k}" if k else "")
+    print(f"  mtgo.com dates found for {found}/{len(events)} events; "
+          f"{sum(1 for v in groups.values() if len(v) > 1)} same-day duplicates", flush=True)
+    return slug_of, day_of
+
+
+# ---------- decklists without a Videre label ----------
+GUESS_DAYS = 45      # compare with labelled decklists from this many days either side
+GUESS_MIN = 0.5      # minimum share of the 60 that must match the nearest labelled deck
+
+
+def guess_labels(pool: list, unlabelled: list, ix) -> int:
+    """
+    Videre sometimes never labels an event's decklists (about 2% of events). Give each such decklist
+    the label of the most similar labelled decklist from nearby dates, measured as the share of
+    mainboard cards in common (counting copies). Decks with nothing similar enough stay Unknown.
+    """
+    by_day: dict[str, list] = {}
+    for day, main, deck, group in pool:
+        by_day.setdefault(day, []).append((frozenset(main), main, deck, group))
+    done = 0
+    for day, main, players, at in unlabelled:
+        d0, names = date.fromisoformat(day), frozenset(main)
+        near = [c for k in range(-GUESS_DAYS, GUESS_DAYS + 1)
+                for c in by_day.get((d0 + timedelta(days=k)).isoformat(), ())]
+        near.sort(key=lambda c: len(names & c[0]) / (len(names | c[0]) or 1), reverse=True)
+        best, score = None, 0.0
+        for _, other, deck, group in near[:20]:
+            both = sum(min(q, other.get(c, 0)) for c, q in main.items())
+            sim = both / (max(sum(main.values()), sum(other.values())) or 1)
+            if sim > score:
+                best, score = (deck, group), sim
+        if best and score >= GUESS_MIN:
+            players[at], players[at + 1] = ix("decks", best[0]), ix("groups", best[1])
+            done += 1
+    return done
+
+
 # ---------- manual classification ----------
 def load_rules(fmt: str) -> dict:
     if not CLASSIFY.exists():
@@ -145,16 +256,15 @@ def main():
     tables = {k: {} for k in ("decks", "groups", "names", "kinds")}
     ix = lambda t, v: tables[t].setdefault(v, len(tables[t]))  # noqa: E731
     packed, relabelled, colour_only = [], 0, 0
-    # MTGGoldfish names same-name same-day events from the last one back: the later event keeps the
-    # plain slug and the earlier one gets "-1" (then "-2", ...). Events are ordered by Videre event id.
-    base_of = {e["id"]: re.sub(r"[^a-z0-9]+", "-", e["name"].lower()).strip("-") + "-" + e["date"][:10] for e in events}
-    same: dict[str, list] = {}
-    for e in events:
-        same.setdefault(base_of[e["id"]], []).append(e["id"])
-    slug_of = {}
-    for base, ids in same.items():
-        for k, eid in enumerate(sorted(ids, reverse=True)):
-            slug_of[eid] = base if k == 0 else f"{base}-{k}"
+    pool, unlabelled = [], []   # labelled decklists (for guessing) and decklists Videre has not labelled yet
+    out = ROOT / "site" / f"data-{fmt}.json"
+    previous = {}
+    if out.exists():
+        try:
+            previous = {e[0]: (e[2], e[6]) for e in json.loads(out.read_text(encoding="utf-8"))["events"] if len(e) > 7}
+        except (ValueError, KeyError):
+            pass
+    slug_of, day_of = mtgo_links(events, previous)
     for ev, raw in zip(events, raws):
         ms = [m for m in raw["matches"]]
         if not ms:
@@ -206,6 +316,8 @@ def main():
         players, ranks = [], []
         for n in names:
             deck, group, deck_id = label.get(n, ("", "", None))
+            if not deck and n in decks:
+                unlabelled.append((ev["date"][:10], decks[n]["main"], players, len(players) + 1))
             if deck:
                 d = decks.get(n)
                 cards = None if d is None else {**d["side"], **d["main"]}
@@ -215,13 +327,17 @@ def main():
                 deck, group = nd, ng
                 if COLOURS_ONLY.match(deck):
                     colour_only += 1
+                elif d is not None:
+                    pool.append((ev["date"][:10], d["main"], deck, group))
             dropped = played[n] < swiss if n in played else last_round.get(n, 0) < swiss
             flags = (1 if dropped else 0) | (2 if last_round.get(n, 0) > swiss else 0)
             players += [ix("names", n), ix("decks", deck), ix("groups", group), w[n], l[n], flags]
             ranks.append(rank.get(n, 0))
 
-        day = ev["date"][:10]
+        day = day_of[ev["id"]]
         packed.append([str(ev["id"]), ix("kinds", ev["name"]), day, swiss, players, matches, slug_of[ev["id"]], ranks])
+
+    guessed = guess_labels(pool, unlabelled, ix)
 
     data = {
         "built": datetime.now(timezone.utc).isoformat(timespec="minutes"),
@@ -233,11 +349,11 @@ def main():
         **{k: list(v) for k, v in tables.items()},
         "events": packed,
     }
-    out = ROOT / "site" / f"data-{fmt}.json"
     out.write_text(json.dumps(data, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
     n_matches = sum(len(e[5]) // 5 for e in packed)
     print(f"\nWrote {out} ({out.stat().st_size / 1e3:.0f} kB): {len(packed)} events, {n_matches:,} matches, "
           f"{len(tables['decks'])} deck labels, {data['first']} .. {data['last']}")
+    print(f"{guessed}/{len(unlabelled)} decklists Videre had not labelled were matched to a similar labelled deck")
     print(f"classify.json relabelled {relabelled} decklists; {colour_only} top-32 decks still have colour-only labels")
     print(f"Done in {time.time() - t0:.0f}s")
 
