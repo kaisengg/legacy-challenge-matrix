@@ -137,6 +137,9 @@
   .rd { font-size: 11px; line-height: 1.5; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); white-space: nowrap; }
   .rd.w { border-color: rgba(var(--good), .6); background: rgba(var(--good), .12); }
   .rd.l { border-color: rgba(var(--bad), .6); background: rgba(var(--bad), .12); }
+  .rd.own { border-style: dashed; background: none; }
+  td.btns { white-space: nowrap; }
+  .pbanner .internal { display: block; margin-top: 4px; }
   .w { color: rgb(var(--good)); font-weight: 600; } .l { color: rgb(var(--bad)); font-weight: 600; }
   a { color: var(--accent); }
   footer { margin-top: 22px; font-size: 12px; color: var(--muted); max-width: 90ch; }
@@ -354,7 +357,8 @@ function applyProvider(d) {
   $("srcNote").hidden = !videre && !gap;
   $("footGap").hidden = !gap;
   const ex = { legacy: ["Cirxi", "Doomsday", "Dimir Tempo"], modern: ["a username", "Boros Energy", "Eldrazi Ramp"], vintage: ["a username", "Jewel Shops", "Raker Shops"] }[state.fmt] || ["a username", "a deck", "a deck"];
-  $("playerInput").placeholder = ex[0] === "a username" ? "Type a username" : `Type a username, e.g. ${ex[0]}`;
+  playerHint = ex[0] === "a username" ? "Type a username" : `Type a username, e.g. ${ex[0]}`;
+  $("playerInput").placeholder = state.players.length ? "Add another player" : playerHint;
   $("focusInputR").placeholder = `Type a deck, e.g. ${ex[1]}`;
   $("focusInputC").placeholder = `Type a deck, e.g. ${ex[2]}`;
   if (videre) {
@@ -372,7 +376,7 @@ function applyProvider(d) {
 async function switchFormat(fmt) {
   if (fmt === state.fmt || !FORMATS[fmt]) return;
   state.fmt = fmt; store.set("lmm-format", fmt);
-  state.player = null; store.set("lmm-player", null);
+  state.players = []; store.set("lmm-player", []);
   state.focusR = []; state.focusC = []; store.set(FOCUS.R.key, []); store.set(FOCUS.C.key, []);
   state.picked = null; state.hlRow = state.hlCol = null;
   $("status").classList.remove("err");
@@ -502,7 +506,7 @@ function aggregate() {
   const cell = (a, b) => { const k = a + "\u0000" + b; let c = cells.get(k); if (!c) cells.set(k, c = { w: 0, l: 0, d: 0, list: [] }); return c; };
   const deck = (k) => { let d = decks.get(k); if (!d) decks.set(k, d = { entries: 0, w: 0, l: 0, d: 0 }); return d; };
   const keyOf = (p) => (level === "deck" ? p.deck : p.group) || "Unknown";
-  if (state.player) return aggregatePlayer(state.player, { cells, decks, cell, deck, keyOf, unitGame, top8 });
+  if (state.players.length) return aggregatePlayer(state.players, { cells, decks, cell, deck, keyOf, unitGame, top8 });
   for (const ev of state.events) {
     if (kindsOff.has(ev.kind)) continue;
     events++;
@@ -539,25 +543,30 @@ function aggregate() {
   }
   return { cells, decks, matches, excl, events, entries, keyOf };
 }
-// One player's matches only: rows = decks they piloted, columns = decks they faced.
+// The selected players' matches only: rows = decks they piloted, columns = decks they faced.
 // Their own drops and unlabelled opponents are always kept so the record is complete.
-function aggregatePlayer(name, { cells, decks, cell, deck, keyOf, unitGame, top8 }) {
+// With several players selected their matches are pooled; a match between two selected
+// players is left out (it would add one win and one loss to the same record).
+const playersLabel = (names) => names.length === 1 ? names[0] : names.length <= 3 ? names.join(" + ") : `${names.length} players`;
+function aggregatePlayer(names, { cells, decks, cell, deck, keyOf, unitGame, top8 }) {
+  const sel = new Set(names);
   const opps = new Map();
   const opp = (k) => { let d = opps.get(k); if (!d) opps.set(k, d = { entries: 0, w: 0, l: 0, d: 0 }); return d; };
-  let matches = 0, events = 0, entries = 0, top8s = 0;
+  let matches = 0, events = 0, entries = 0, top8s = 0, internal = 0;
   for (const ev of state.events) {
     if (kindsOff.has(ev.kind)) continue;
-    const me = ev.players.findIndex((p) => p.name === name);
-    if (me < 0) continue;
-    events++; entries++;
-    const P = ev.players[me], A = keyOf(P);
-    deck(A).entries++;
-    if (P.top8) top8s++;
+    const mine = new Set();
+    ev.players.forEach((p, i) => { if (sel.has(p.name)) mine.add(i); });
+    if (!mine.size) continue;
+    events++; entries += mine.size;
+    for (const i of mine) { deck(keyOf(ev.players[i])).entries++; if (ev.players[i].top8) top8s++; }
     for (const [rnd, ia, ib, ga, gb] of ev.matches) {
-      if (ia !== me && ib !== me) continue;
+      const inA = mine.has(ia), inB = mine.has(ib);
+      if (!inA && !inB) continue;
       if (!top8 && rnd > ev.swiss_rounds) continue;
-      const o = ia === me ? ib : ia, mg = ia === me ? ga : gb, og = ia === me ? gb : ga;
-      const B = keyOf(ev.players[o]);
+      if (inA && inB) { internal++; continue; }
+      const me = inA ? ia : ib, o = inA ? ib : ia, mg = inA ? ga : gb, og = inA ? gb : ga;
+      const A = keyOf(ev.players[me]), B = keyOf(ev.players[o]);
       matches++;
       let aw, al, ad;
       if (unitGame) { aw = mg; al = og; ad = 0; } else { aw = mg > og ? 1 : 0; al = og > mg ? 1 : 0; ad = mg === og ? 1 : 0; }
@@ -566,7 +575,8 @@ function aggregatePlayer(name, { cells, decks, cell, deck, keyOf, unitGame, top8
       const dB = opp(B); dB.entries++; dB.w += aw; dB.l += al; dB.d += ad;
     }
   }
-  return { cells, decks, opps, matches, excl: 0, events, entries, top8s, keyOf, player: name };
+  return { cells, decks, opps, matches, excl: 0, events, entries, top8s, internal, keyOf,
+           players: names, multi: names.length > 1, player: playersLabel(names) };
 }
 const pct = (w, l) => (w + l ? w / (w + l) : NaN);
 function wilson(w, n) {
@@ -633,7 +643,11 @@ $("level").addEventListener("change", () => { if (state.focusR.length || state.f
 
 /* ---------- player ---------- */
 let playerNames = [];               // [name, challenges] across all data, most active first
-state.player = typeof store.get("lmm-player") === "string" ? store.get("lmm-player") : null;
+let playerHint = "Type a username";
+state.players = (() => {            // older visits saved a single name
+  const v = store.get("lmm-player");
+  return typeof v === "string" ? [v] : Array.isArray(v) ? v.filter((n) => typeof n === "string") : [];
+})();
 function suggestPlayers() {
   const q = $("playerInput").value.trim().toLowerCase(), dl = $("playerList");
   dl.innerHTML = "";
@@ -645,40 +659,60 @@ function suggestPlayers() {
     if (++n >= 30) break;
   }
 }
-function setPlayer(name) {
-  state.player = name; store.set("lmm-player", name);
+// setPlayers([name]) shows one player, setPlayers([]) goes back to the metagame.
+function setPlayers(names) {
+  state.players = [...new Set(names)]; store.set("lmm-player", state.players);
   state.picked = null; state.hlRow = state.hlCol = null; render();
 }
+const setPlayer = (name) => setPlayers(name ? [name] : []);
+const addPlayer = (name) => { if (!state.players.includes(name)) setPlayers([...state.players, name]); };
+const removePlayer = (name) => setPlayers(state.players.filter((n) => n !== name));
 function addPlayerFromInput() {
   const input = $("playerInput"), v = input.value.trim().toLowerCase();
   if (!v) return;
   const hit = playerNames.find(([n]) => n.toLowerCase() === v);
   if (!hit) return;
   input.value = ""; $("playerList").innerHTML = "";
-  setPlayer(hit[0]);
+  addPlayer(hit[0]);
 }
 $("playerInput").addEventListener("input", suggestPlayers);
 $("playerInput").addEventListener("change", addPlayerFromInput);
 $("playerInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addPlayerFromInput(); } });
 function renderPlayerChip() {
   const box = $("playerChip"); box.innerHTML = "";
-  if (!state.player) return;
-  const chip = document.createElement("span"); chip.className = "chip";
-  const label = document.createElement("span"); label.textContent = state.player;
-  const x = document.createElement("button"); x.textContent = "×"; x.setAttribute("aria-label", `Stop showing only ${state.player}`);
-  x.onclick = () => setPlayer(null);
-  chip.append(label, x); box.appendChild(chip);
+  for (const name of state.players) {
+    const chip = document.createElement("span"); chip.className = "chip";
+    const label = document.createElement("span"); label.textContent = name;
+    const x = document.createElement("button"); x.textContent = "×"; x.setAttribute("aria-label", `Remove ${name}`);
+    x.onclick = () => removePlayer(name);
+    chip.append(label, x); box.appendChild(chip);
+  }
+  $("playerInput").placeholder = state.players.length ? "Add another player" : playerHint;
 }
 function renderPlayerBanner(agg) {
   const b = $("playerBanner");
-  if (!state.player) { b.hidden = true; return; }
+  if (!state.players.length) { b.hidden = true; return; }
   b.hidden = false;
-  b.innerHTML = `<span class="grow">Showing only <b></b>’s matches. Rows are the decks they piloted, columns the decks they faced.
-    Every cell counts from 1 match; the drop filter does not apply. <a target="_blank" rel="noopener">MTGGoldfish profile</a></span>
+  const multi = state.players.length > 1;
+  b.innerHTML = `<span class="grow">${multi
+      ? `Showing the pooled matches of <b></b>. Rows are the decks they piloted, columns the decks they faced.`
+      : `Showing only <b></b>’s matches. Rows are the decks they piloted, columns the decks they faced.`}
+    Every cell counts from 1 match; the drop filter does not apply.
+    ${multi && agg.internal ? `<span class="internal"></span>` : ""}
+    <span class="links"></span></span>
     <button id="playerExit">Back to the metagame</button>`;
-  b.querySelector("b").textContent = state.player;
-  const a = b.querySelector("a"); a.href = playerUrl(state.player);
-  $("playerExit").onclick = () => setPlayer(null);
+  b.querySelector("b").textContent = multi ? state.players.join(", ") : state.players[0];
+  if (multi && agg.internal) b.querySelector(".internal").textContent =
+    `${agg.internal} ${agg.internal === 1 ? "match" : "matches"} between selected players ${agg.internal === 1 ? "is" : "are"} left out of the record.`;
+  const links = b.querySelector(".links");
+  links.append(multi ? "MTGGoldfish: " : "");
+  state.players.forEach((name, i) => {
+    const a = document.createElement("a"); a.target = "_blank"; a.rel = "noopener";
+    a.href = playerUrl(name); a.textContent = multi ? name : "MTGGoldfish profile";
+    if (i) links.append(", ");
+    links.append(a);
+  });
+  $("playerExit").onclick = () => setPlayers([]);
 }
 
 /* ---------- render ---------- */
@@ -744,7 +778,8 @@ function render() {
   $("status").classList.remove("err");
   const range = `from ${$("start").value} to ${$("end").value}`;
   $("status").textContent = P
-    ? (agg.events ? `${P}: ${agg.events} challenges ${range}.` : `${P} has no challenges ${range}. Widen the dates or pick another player.`)
+    ? (agg.events ? `${P}: ${agg.events} challenges${agg.multi ? ` (${agg.entries} entries)` : ""} ${range}.`
+                  : `${P} ${agg.multi ? "have" : "has"} no challenges ${range}. Widen the dates or pick another player.`)
     : agg.events ? `${agg.events} challenges ${range}.`
     : "No challenges in this range. Widen the dates or turn an event type back on.";
   renderPlayerLog(agg);
@@ -754,7 +789,7 @@ function render() {
   const t = $("matrix");
   if (!list.length) { t.innerHTML = `<tbody><tr><td class="loading" style="width:auto">Nothing to show for these filters.</td></tr></tbody>`; renderDetail(); return; }
   let html = `<thead><tr><th class="corner">${P ? "Their deck vs opponent →" : "Row vs column →"}</th>` +
-    (P ? `<th class="col tot" title="The player's record on this deck, mirrors included"><span>Overall</span></th>`
+    (P ? `<th class="col tot" title="${agg.multi ? "The selected players' pooled record" : "The player's record"} on this deck, mirrors included"><span>Overall</span></th>`
        : state.provider === "videre"
          ? `<th class="col tot" title="Win % against every opponent, including players outside the top 32; mirrors excluded"><span>Overall (all opponents)</span></th>`
          : `<th class="col tot" title="Win % against every other deck, mirrors excluded"><span>Overall (non-mirror)</span></th>`);
@@ -762,7 +797,7 @@ function render() {
   html += `</tr></thead><tbody>`;
   list.forEach((r, i) => {
     const share = agg.entries ? (r.entries / agg.entries * 100).toFixed(1) : "0";
-    const totTip = P ? `${r.name}: ${r.w}-${r.l} ${unit}, played in ${r.entries} of ${agg.events} challenges (${share}%)`
+    const totTip = P ? `${r.name}: ${r.w}-${r.l} ${unit}, played in ${r.entries} of ${agg.entries} ${agg.multi ? "entries" : "challenges"} (${share}%)`
                      : `${r.name}: ${r.w}-${r.l} non-mirror ${unit}, ${share}% of players`;
     html += `<tr class="${state.hlRow === r.name ? "hl" : ""}"><th class="rowh" data-i="${i}"></th>`;
     const totPicked = state.picked && state.picked[0] === r.name && state.picked[1] === "*" ? " picked" : "";
@@ -852,8 +887,8 @@ function renderDetail() {
       <div class="dcol">
         <div class="dhead"><h3>${P ? "By opponent" : "By player"}</h3>
           <input type="search" id="pilotSearch" placeholder="Filter by username" autocomplete="off" aria-label="Filter players by username"></div>
-        <div class="scroll"><table class="pilots"><thead><tr><th>${P ? "Opponent" : "Player"}</th><th class="num">${P ? `${esc(P)}’s record` : "Matches"}</th><th class="num">Win %</th><th class="num">Games</th><th class="num">Events</th><th></th></tr></thead><tbody></tbody></table></div>
-        <p class="hint" style="margin:6px 0 0">Click a row to show only those matches. ▦ shows that player’s own matrix.</p>
+        <div class="scroll"><table class="pilots"><thead><tr><th>${P ? "Opponent" : "Player"}</th><th class="num">${P ? (agg.multi ? "Their record" : `${esc(P)}’s record`) : "Matches"}</th><th class="num">Win %</th><th class="num">Games</th><th class="num">Events</th><th></th></tr></thead><tbody></tbody></table></div>
+        <p class="hint" style="margin:6px 0 0">Click a row to show only those matches. ▦ shows that player’s own matrix; + adds them to the selected players.</p>
       </div>
       <div class="dcol">
         <div class="dhead"><h3 id="matchHead">Matches</h3><button id="pilotClear" hidden>Show all players</button></div>
@@ -882,10 +917,14 @@ function renderDetail() {
       tr.tabIndex = 0;
       tr.innerHTML = `<td><a target="_blank" rel="noopener"></a></td><td class="num">${p.w}-${p.l}${p.d ? "-" + p.d : ""}</td>` +
         `<td class="num">${isNaN(pct(p.w, p.l)) ? "–" : (pct(p.w, p.l) * 100).toFixed(0) + "%"}</td><td class="num">${p.gw}-${p.gl}</td><td class="num">${p.events.size}</td>` +
-        `<td><button class="mini" aria-label="Show only ${esc(p.name)}'s matches" title="Show only ${esc(p.name)}'s matches">▦</button></td>`;
+        `<td class="btns"><button class="mini" data-act="only" aria-label="Show only ${esc(p.name)}'s matches" title="Show only ${esc(p.name)}'s matches">▦</button>` +
+        (state.players.includes(p.name) ? "" : `<button class="mini" data-act="add" aria-label="Add ${esc(p.name)} to the selected players" title="Add ${esc(p.name)} to the selected players">+</button>`) + `</td>`;
       link(tr.querySelector("a"), p);
       tr.querySelector("a").onclick = (e) => e.stopPropagation();
-      tr.querySelector("button").onclick = (e) => { e.stopPropagation(); setPlayer(p.name); $("matrixPanel").scrollIntoView({ behavior: "smooth", block: "start" }); };
+      const toMatrix = () => $("matrixPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+      tr.querySelector("[data-act=only]").onclick = (e) => { e.stopPropagation(); setPlayer(p.name); toMatrix(); };
+      const add = tr.querySelector("[data-act=add]");
+      if (add) add.onclick = (e) => { e.stopPropagation(); addPlayer(p.name); toMatrix(); };
       const pick = () => { state.dp = state.dp === p.name ? null : p.name; fill(); };
       tr.onclick = pick;
       tr.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
@@ -929,34 +968,34 @@ function renderDetail() {
 }
 
 function renderPlayerLog(agg) {
-  const box = $("playerLog"), P = agg.player;
+  const box = $("playerLog"), P = agg.player, multi = !!agg.multi;
   if (!P) { box.hidden = true; return; }
-  const keyOf = agg.keyOf, rows = [];
+  const keyOf = agg.keyOf, rows = [], sel = new Set(agg.players);
   for (const ev of state.events) {
     if (kindsOff.has(ev.kind)) continue;
-    const me = ev.players.findIndex((p) => p.name === P);
-    if (me >= 0) rows.push({ ev, me, p: ev.players[me] });
+    ev.players.forEach((p, me) => { if (sel.has(p.name)) rows.push({ ev, me, p }); });
   }
-  rows.sort((x, y) => y.ev.date.localeCompare(x.ev.date));
+  rows.sort((x, y) => y.ev.date.localeCompare(x.ev.date) || y.ev.id - x.ev.id || x.p.name.localeCompare(y.p.name));
   if (!rows.length) { box.hidden = true; return; }
   box.hidden = false;
-  box.innerHTML = `<h2></h2><p class="muted" style="margin:0 0 12px">Every round, newest first. Hover a round to see the opponent and score.</p>
-    <div class="scroll" style="max-height:520px"><table><thead><tr><th>Date</th><th>Event</th><th>Deck</th><th>Record</th><th>Rounds</th></tr></thead><tbody></tbody></table></div>`;
-  box.querySelector("h2").textContent = `${P}’s challenges (${rows.length})`;
+  box.innerHTML = `<h2></h2><p class="muted" style="margin:0 0 12px">Every round, newest first. Hover a round to see the opponent and score.${multi ? " Dashed rounds were against another selected player and are not counted in the matrix." : ""}</p>
+    <div class="scroll" style="max-height:520px"><table><thead><tr><th>Date</th><th>Event</th>${multi ? "<th>Player</th>" : ""}<th>Deck</th><th>Record</th><th>Rounds</th></tr></thead><tbody></tbody></table></div>`;
+  box.querySelector("h2").textContent = multi ? `Their challenges (${rows.length} entries)` : `${P}’s challenges (${rows.length})`;
   const tb = box.querySelector("tbody"), frag = document.createDocumentFragment();
   for (const { ev, me, p } of rows) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${ev.date}</td><td><a target="_blank" rel="noopener"></a></td><td></td>` +
+    tr.innerHTML = `<td>${ev.date}</td><td><a target="_blank" rel="noopener"></a></td>${multi ? "<td></td>" : ""}<td></td>` +
       `<td>${p.w}-${p.l}${p.top8 ? ` <span class="w">Top 8</span>` : p.dropped ? ` <span class="muted">dropped</span>` : ""}</td><td class="rounds"><div class="rounds"></div></td>`;
     const a = tr.querySelector("a"); a.href = `https://www.mtggoldfish.com/tournament/${ev.gf}#paper`; a.textContent = ev.name;
-    tr.cells[2].textContent = keyOf(p);
+    if (multi) tr.cells[2].textContent = p.name;
+    tr.cells[multi ? 3 : 2].textContent = keyOf(p);
     const box2 = tr.querySelector("div.rounds");
     const mine = ev.matches.filter(([, ia, ib]) => ia === me || ib === me).sort((x, y) => x[0] - y[0]);
     for (const [rnd, ia, ib, ga, gb] of mine) {
       const o = ia === me ? ib : ia, mg = ia === me ? ga : gb, og = ia === me ? gb : ga, op = ev.players[o];
       const res = mg > og ? "W" : og > mg ? "L" : "D";
       const chip = document.createElement("span");
-      chip.className = "rd" + (res === "W" ? " w" : res === "L" ? " l" : "");
+      chip.className = "rd" + (res === "W" ? " w" : res === "L" ? " l" : "") + (multi && sel.has(op.name) ? " own" : "");
       chip.textContent = `${rnd > ev.swiss_rounds ? "T8" : "R" + rnd} ${res} ${deckLabel(op, keyOf, ev)}`;
       chip.title = `${rnd > ev.swiss_rounds ? "Top 8" : "Round " + rnd}: ${res === "W" ? "won" : res === "L" ? "lost" : "drew"} ${mg}-${og} vs ${op.name} (${deckLabel(op, keyOf, ev)})`;
       box2.appendChild(chip);
