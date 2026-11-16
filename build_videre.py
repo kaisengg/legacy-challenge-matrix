@@ -344,7 +344,13 @@ def fill_legacy(path: Path) -> None:
     kinds = {T["kinds"][e[1]] for e in sheets}
     fill_from = (date.today() - timedelta(days=FILL_DAYS)).isoformat()
     since = min(date.fromisoformat(last), date.today() - timedelta(days=FILL_DAYS)) - timedelta(days=FILL_OVERLAP_DAYS)
-    events = [e for e in get_all(f"/events/legacy?min_date={since}&max_date={date.today()}") if e["name"] in kinds]
+    # sheets give both challenges of a busy day the same MTGGoldfish name; Videre tells them apart
+    same = Counter(e[6] for e in sheets)
+    pairs = [e for e in sheets if same[e[6]] > 1]
+    pair_days = {(date.fromisoformat(e[2]) + timedelta(days=k)).isoformat() for e in pairs for k in (-1, 0, 1)}
+    first = min([since.isoformat()] + [e[2] for e in pairs])
+    events = [e for e in get_all(f"/events/legacy?min_date={first}&max_date={date.today()}") if e["name"] in kinds
+              and (e["date"][:10] >= since.isoformat() or e["date"][:10] in pair_days)]
     events.sort(key=lambda e: (e["date"], e["id"]))
     with ThreadPoolExecutor(max_workers=4) as pool:
         raws = list(pool.map(lambda e: event_raw("legacy", e), events))
@@ -353,17 +359,19 @@ def fill_legacy(path: Path) -> None:
 
     # which sheet (if any) holds each Videre event: same date +-1 day, mostly the same players
     sheet_players = [(e, date.fromisoformat(e[2]), {T["names"][e[4][i]] for i in range(0, len(e[4]), 6)})
-                     for e in sheets if e[2] >= since.isoformat()]
-    def sheet_of(e):
-        mine, day = {V["names"][e[4][i]] for i in range(0, len(e[4]), 6)}, date.fromisoformat(e[2])
+                     for e in sheets if e[2] >= since.isoformat() or same[e[6]] > 1]
+    raw_names = {str(ev["id"]): {x["player"] for x in raw["standings"]} | {m["player"] for m in raw["matches"]}
+                 for ev, raw in zip(events, raws)}
+    def sheet_of(eid: str, day: date):
+        mine = raw_names[eid]
         best_e, best_share = None, 0.0
         for se, sday, names in sheet_players:
-            if abs((sday - day).days) <= 1:
+            if mine and abs((sday - day).days) <= 1:
                 share = len(mine & names) / (min(len(mine), len(names)) or 1)
                 if share > best_share:
                     best_e, best_share = se, share
         return best_e if best_share >= 0.6 else None
-    sheet_for = {e[0]: sheet_of(e) for e in packed}
+    sheet_for = {str(ev["id"]): sheet_of(str(ev["id"]), date.fromisoformat(ev["date"][:10])) for ev in events}
     claimed = Counter(id(s_) for s_ in sheet_for.values() if s_)
     if any(n > 1 for n in claimed.values()):
         print(f"  note: {sum(1 for n in claimed.values() if n > 1)} sheets matched more than one Videre event")
@@ -412,6 +420,37 @@ def fill_legacy(path: Path) -> None:
                     group = best(group_votes.get(vg)) or vg; kept += 1
             players += [put("names", V["names"][e[4][i]]), put("decks", deck), put("groups", group)] + e[4][i + 3:i + 6]
         gap.append([e[0], put("kinds", V["kinds"][e[1]]), e[2], e[3], players, e[5], e[6], e[7]])
+
+    # second challenge of a same-name pair gets "-1" (MTGO event ids follow start order)
+    vid_of = {id(sh): int(eid) for eid, sh in sheet_for.items() if sh}
+    relinked = 0
+    for slug in {e[6] for e in pairs}:
+        pair = [e for e in pairs if e[6] == slug]
+        if len(pair) != 2:
+            continue
+        a, b = (vid_of.get(id(e)) for e in pair)
+        if a and b and a != b:                       # both found in Videre: lower MTGO id ran first
+            second = pair[0] if a > b else pair[1]
+        elif a or b:                                 # one found: mtgo.com lists the pair's other event id
+            known = pair[0] if a else pair[1]
+            vid = a or b
+            y, m = int(pair[0][2][:4]), int(pair[0][2][5:7])
+            index = {}
+            for yy, mm in ((y, m), (y + (m == 12), m % 12 + 1), (y - (m == 1), (m - 2) % 12 + 1)):
+                try:
+                    index.update(mtgo_month(yy, mm))
+                except Exception:  # noqa: BLE001
+                    pass
+            hit = index.get(str(vid))
+            twins = sorted(int(i) for i, v in index.items() if hit and tuple(v) == tuple(hit))
+            if len(twins) != 2:
+                continue
+            second = known if vid == twins[1] else (pair[1] if known is pair[0] else pair[0])
+        else:
+            continue
+        second[6] = slug + "-1"
+        relinked += 1
+    print(f"Same-day sheet pairs: {relinked}/{len(pairs) // 2} relinked (second gets -1)")
 
     d.update(T)
     d["events"] = sheets + gap
