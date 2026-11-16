@@ -28,8 +28,27 @@ jobs:
         with:
           python-version: "3.12"
 
+      # A push that changes only files under site/ (the page) reuses the committed data and goes
+      # straight to the deploy. Scheduled and manual runs, and pushes touching the build scripts,
+      # rebuild everything.
+      - name: Decide whether to rebuild the data
+        id: scope
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          data=true
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ] \
+             && git fetch --quiet --depth=1 origin "$BEFORE"; then
+            changed=$(git diff --name-only "$BEFORE" HEAD)
+            echo "Changed files:"; echo "$changed"
+            if [ -n "$changed" ] && ! echo "$changed" | grep -qv '^site/'; then data=false; fi
+          fi
+          echo "Rebuild data: $data"
+          echo "data=$data" >> "$GITHUB_OUTPUT"
+
       # Downloaded sheets are kept between runs so each day only fetches new ones.
       - name: Restore sheet cache
+        if: steps.scope.outputs.data == 'true'
         uses: actions/cache/restore@v4
         with:
           path: cache
@@ -37,27 +56,31 @@ jobs:
           restore-keys: sheets-
 
       - name: Download new sheets and rebuild data
+        if: steps.scope.outputs.data == 'true'
         run: python -u build_data.py
 
       # Challenges newer than the newest sheet come from Videre (top 32 only) until their sheet is
       # uploaded; build_data.py starts from the sheets each run, so a sheet replaces them automatically.
       - name: Fill Legacy challenges newer than the latest sheet from Videre
+        if: steps.scope.outputs.data == 'true'
         continue-on-error: true
         run: python -u build_videre.py legacy --fill
 
       # Vintage and Modern have no community sheets: top-32 data from the Videre Project's public API.
       # If Videre is unreachable, the last committed site/data-vintage.json is deployed instead.
       - name: Rebuild Vintage data from Videre
+        if: steps.scope.outputs.data == 'true'
         continue-on-error: true
         run: python -u build_videre.py vintage
 
       - name: Rebuild Modern data from Videre
+        if: steps.scope.outputs.data == 'true'
         continue-on-error: true
         run: python -u build_videre.py modern
 
       # Saved even if a later step fails, so the next run does not start from scratch.
       - name: Save sheet cache
-        if: always()
+        if: always() && steps.scope.outputs.data == 'true'
         uses: actions/cache/save@v4
         with:
           path: cache
@@ -66,6 +89,7 @@ jobs:
       # site/data.json is generated, so if main moved meanwhile this run's fresh build wins
       # (-X theirs = the commit being replayed). A failed commit does not block the deploy.
       - name: Commit refreshed data
+        if: steps.scope.outputs.data == 'true'
         continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
