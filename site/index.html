@@ -259,6 +259,7 @@
     <span id="footSheets">Data: the community-maintained Legacy Challenge sheets in the
     <a id="srcLink" href="https://drive.google.com/drive/folders/1eX3hYT_iou09-xgrhScFvdz2ShIlS3EJ" target="_blank" rel="noopener">Public Facing Sheets</a>
     Drive folder (Input and Match Up Input tabs). All credit for the archetype labels and match entry goes to its contributors.</span>
+    <span id="footGap" hidden>Recent challenges without a sheet yet: the <a href="https://videreproject.com" target="_blank" rel="noopener">Videre Project</a>, until their sheets are uploaded.</span>
     <span id="footVidere" hidden>Data: the <a href="https://videreproject.com" target="_blank" rel="noopener">Videre Project</a>
     (<a href="https://github.com/videre-project" target="_blank" rel="noopener">open source</a>), which records MTGO tournament results and labels decklists.
     All credit for the match data and archetype labels goes to its contributors; a few colour-only labels are corrected by hand.</span>
@@ -315,7 +316,7 @@ async function loadData() {
     for (let i = 0; i < mf.length; i += 5) matches.push([mf[i], mf[i + 1], mf[i + 2], mf[i + 3], mf[i + 4]]);
     const k = d.kinds[kind];
     const gf = slug || `${k.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${date}`;
-    return { id, kind: k, date, name: `${k} ${fmt(date)}`, swiss_rounds: swiss, players, matches, gf };
+    return { id, kind: k, date, name: `${k} ${fmt(date)}`, swiss_rounds: swiss, players, matches, gf, videre: !!rk };
   });
   const seen = new Map();
   for (const ev of state.all) for (const pl of ev.players) seen.set(pl.name, (seen.get(pl.name) || 0) + 1);
@@ -349,7 +350,9 @@ function applyProvider(d) {
   $("unknownField").hidden = videre;
   $("footSheets").hidden = videre;
   $("footVidere").hidden = !videre;
-  $("srcNote").hidden = !videre;
+  const filled = videre ? [] : d.events.filter((e) => e.length > 7).map((e) => e[2]), gap = filled.length;
+  $("srcNote").hidden = !videre && !gap;
+  $("footGap").hidden = !gap;
   const ex = { legacy: ["Cirxi", "Doomsday", "Dimir Tempo"], modern: ["a username", "Boros Energy", "Eldrazi Ramp"], vintage: ["a username", "Jewel Shops", "Raker Shops"] }[state.fmt] || ["a username", "a deck", "a deck"];
   $("playerInput").placeholder = ex[0] === "a username" ? "Type a username" : `Type a username, e.g. ${ex[0]}`;
   $("focusInputR").placeholder = `Type a deck, e.g. ${ex[1]}`;
@@ -359,6 +362,11 @@ function applyProvider(d) {
       `so deck-vs-deck cells count matches where <b>both</b> decks are known. “Overall” counts every match a top-32 deck played, including wins and losses against players who missed the top 32 ` +
       `(shown in the last column, “${OUTSIDE}”), so it tends to sit above 50%. Meta share is the share of top-32 finishes. ` +
       `Deck = Videre’s deck label, Archetype group = its archetype family.`;
+  } else if (gap) {
+    const days = [...new Set(filled)].map((x) => { const [y, m, dd] = x.split("-").map(Number); return `${m}/${dd}`; }).join(", ");
+    $("srcNote").innerHTML = `<b>${gap} provisional challenge${gap > 1 ? "s" : ""} (${days}).</b> These have no community sheet yet, so they ` +
+      `come from the Videre Project’s MTGO records until their sheets are uploaded. Those have only the top 32 decklists, so their matches against players ` +
+      `outside the top 32 count toward “Overall” and the “${OUTSIDE}” column, and deck names were matched to the sheets’ names where possible.`;
   }
 }
 async function switchFormat(fmt) {
@@ -484,7 +492,7 @@ const OUTSIDE = "Outside top 32";      // Videre data: opponents without a publi
 // Opponent without a published decklist (Videre data): show how they finished instead.
 const ordinal = (n) => n + ((n % 100 >= 11 && n % 100 <= 13) ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
 const finishLabel = (p) => `– (${p.rank ? ordinal(p.rank) + " place, " : ""}${p.w}-${p.l}${p.dropped ? " drop" : ""})`;
-const deckLabel = (p, keyOf) => state.provider === "videre" && keyOf(p) === "Unknown" ? finishLabel(p) : keyOf(p);
+const deckLabel = (p, keyOf, ev) => ev.videre && keyOf(p) === "Unknown" ? finishLabel(p) : keyOf(p);
 function aggregate() {
   const videre = state.provider === "videre";
   const level = $("level").value, unitGame = $("unit").value === "game", mode = videre ? "keep" : $("drops").value;
@@ -502,15 +510,15 @@ function aggregate() {
     ev.players.forEach((p, i) => {
       if (out[i]) { excl++; return; }
       const k = keyOf(p);
-      if (!unknown && k === "Unknown") { if (videre) excl++; return; }
+      if (k === "Unknown" && (ev.videre || !unknown)) { if (videre) excl++; return; }
       deck(k).entries++; entries++;
     });
     for (const [rnd, ia, ib, ga, gb] of ev.matches) {
       if (out[ia] || out[ib]) continue;
       if (!top8 && rnd > ev.swiss_rounds) continue;
       const A = keyOf(ev.players[ia]), B = keyOf(ev.players[ib]);
-      const half = videre && (A === "Unknown") !== (B === "Unknown");   // a top-32 deck vs someone outside the top 32
-      if (!half && !unknown && (A === "Unknown" || B === "Unknown")) continue;
+      const half = ev.videre && (A === "Unknown") !== (B === "Unknown");   // a top-32 deck vs someone outside the top 32
+      if (!half && (ev.videre || !unknown) && (A === "Unknown" || B === "Unknown")) continue;
       matches++;
       const ref = { ev, rnd, a: ia, b: ib, ga, gb };
       let aw, al, ad;
@@ -715,7 +723,7 @@ function render() {
     list = sorter(all.slice(0, topN));
     cols = list;
   }
-  if (!P && state.provider === "videre" && !fC.length) {
+  if (!P && !fC.length) {
     const n = list.reduce((t, r) => t + (agg.cells.get(r.name + "\u0000" + OUTSIDE)?.list.length || 0), 0);
     if (n) cols = [...cols, { name: OUTSIDE, entries: n, outside: true }];
   }
@@ -908,7 +916,7 @@ function renderDetail() {
       evLink.href = `https://www.mtggoldfish.com/tournament/${r.ev.gf}#paper`; evLink.textContent = r.ev.name;
       evLink.title = "Open this challenge on MTGGoldfish";
       link(meLink, r.me); link(opLink, r.op);
-      if (b === "*" || b === OUTSIDE) tr.cells[6].textContent = deckLabel(r.op, keyOf);
+      if (b === "*" || b === OUTSIDE) tr.cells[6].textContent = deckLabel(r.op, keyOf, r.ev);
       frag.appendChild(tr);
     }
     tb.appendChild(frag);
@@ -949,8 +957,8 @@ function renderPlayerLog(agg) {
       const res = mg > og ? "W" : og > mg ? "L" : "D";
       const chip = document.createElement("span");
       chip.className = "rd" + (res === "W" ? " w" : res === "L" ? " l" : "");
-      chip.textContent = `${rnd > ev.swiss_rounds ? "T8" : "R" + rnd} ${res} ${deckLabel(op, keyOf)}`;
-      chip.title = `${rnd > ev.swiss_rounds ? "Top 8" : "Round " + rnd}: ${res === "W" ? "won" : res === "L" ? "lost" : "drew"} ${mg}-${og} vs ${op.name} (${deckLabel(op, keyOf)})`;
+      chip.textContent = `${rnd > ev.swiss_rounds ? "T8" : "R" + rnd} ${res} ${deckLabel(op, keyOf, ev)}`;
+      chip.title = `${rnd > ev.swiss_rounds ? "Top 8" : "Round " + rnd}: ${res === "W" ? "won" : res === "L" ? "lost" : "drew"} ${mg}-${og} vs ${op.name} (${deckLabel(op, keyOf, ev)})`;
       box2.appendChild(chip);
     }
     if (!mine.length) box2.innerHTML = `<span class="muted">No rounds entered</span>`;

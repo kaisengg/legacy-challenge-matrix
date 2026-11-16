@@ -16,6 +16,12 @@ Credit for the archetype labels and match entry goes to the sheets' contributors
 
 ### Modern and Vintage
 
+The sheets are usually uploaded a few days to a week after each challenge, not always in order. Until then, any
+challenge from the last 30 days without a sheet is filled from the Videre Project (below) with top-32 data
+(`python build_videre.py legacy --fill`, run after `build_data.py`). Sheets are matched to Videre events by their
+players, and Videre's deck names are translated to the sheets' names using players found in both sources. The page
+marks these challenges as provisional; each refresh rebuilds from the sheets first, so an uploaded sheet replaces them.
+
 Modern and Vintage have no such sheets, so their toggles use the [Videre Project](https://videreproject.com)'s
 public MTGO API ([open source](https://github.com/videre-project)) for every challenge since January 2024
 (Videre has no round-by-round data before that).

@@ -39,6 +39,12 @@ jobs:
       - name: Download new sheets and rebuild data
         run: python -u build_data.py
 
+      # Challenges newer than the newest sheet come from Videre (top 32 only) until their sheet is
+      # uploaded; build_data.py starts from the sheets each run, so a sheet replaces them automatically.
+      - name: Fill Legacy challenges newer than the latest sheet from Videre
+        continue-on-error: true
+        run: python -u build_videre.py legacy --fill
+
       # Vintage and Modern have no community sheets: top-32 data from the Videre Project's public API.
       # If Videre is unreachable, the last committed site/data-vintage.json is deployed instead.
       - name: Rebuild Vintage data from Videre

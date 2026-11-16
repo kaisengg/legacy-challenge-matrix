@@ -25,6 +25,7 @@ field per event: each player's final placing (0 = unknown), in player order.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import re
 import sys
@@ -124,6 +125,8 @@ def mtgo_month(y: int, m: int) -> dict[str, tuple[str, str]]:
             break
     else:
         raise RuntimeError("index page had no decklist links")
+    if path.exists():   # never forget an event mtgo.com listed before
+        out = {**json.loads(path.read_text(encoding="utf-8")), **out}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out), encoding="utf-8")
     return out
@@ -233,37 +236,13 @@ def classify(rules: dict, deck: str, group: str, cards: dict | None, deck_key: s
     return ren.get(deck, deck), ren.get(group, group)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("format", help="MTGO format, e.g. vintage, modern, pauper")
-    ap.add_argument("--since", default=FIRST_MATCHES, help="first event date, YYYY-MM-DD")
-    args = ap.parse_args()
-    sys.stdout.reconfigure(encoding="utf-8")
-    fmt = args.format.lower()
-    t0 = time.time()
-    until = date.today()
-    since = date.fromisoformat(args.since)
-
-    events = [e for e in get_all(f"/events/{fmt}?min_date={since}&max_date={until}") if e["kind"] in KINDS]
-    events.sort(key=lambda e: (e["date"], e["id"]))
-    print(f"{len(events)} {fmt} challenges since {since} ({time.time() - t0:.0f}s)", flush=True)
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        raws = list(pool.map(lambda e: event_raw(fmt, e), events))
-    print(f"  downloaded ({time.time() - t0:.0f}s)", flush=True)
-
+def pack_events(fmt: str, events: list[dict], raws: list[dict], previous: dict) -> tuple[list, dict, dict]:
+    """Pack Videre events into the page format; returns (events, string tables, counts)."""
     rules = load_rules(fmt)
     tables = {k: {} for k in ("decks", "groups", "names", "kinds")}
     ix = lambda t, v: tables[t].setdefault(v, len(tables[t]))  # noqa: E731
     packed, relabelled, colour_only = [], 0, 0
     pool, unlabelled = [], []   # labelled decklists (for guessing) and decklists Videre has not labelled yet
-    out = ROOT / "site" / f"data-{fmt}.json"
-    previous = {}
-    if out.exists():
-        try:
-            previous = {e[0]: (e[2], e[6]) for e in json.loads(out.read_text(encoding="utf-8"))["events"] if len(e) > 7}
-        except (ValueError, KeyError):
-            pass
     slug_of, day_of = mtgo_links(events, previous)
     for ev, raw in zip(events, raws):
         ms = [m for m in raw["matches"]]
@@ -338,6 +317,146 @@ def main():
         packed.append([str(ev["id"]), ix("kinds", ev["name"]), day, swiss, players, matches, slug_of[ev["id"]], ranks])
 
     guessed = guess_labels(pool, unlabelled, ix)
+    stats = {"guessed": guessed, "unlabelled": len(unlabelled), "relabelled": relabelled, "colour_only": colour_only}
+    return packed, tables, stats
+
+
+# ---------- Legacy: fill the gap after the newest community sheet ----------
+FILL_OVERLAP_DAYS = 120   # recent events found in both sources teach the Videre -> sheet name mapping
+FILL_DAYS = 30            # challenges this recent without a sheet are filled from Videre
+
+
+def fill_legacy(path: Path) -> None:
+    """
+    The Legacy page is built from the community Drive sheets (every player labelled), which are
+    uploaded a few days to a week late, not always in order. Append Videre's top-32 data for every
+    challenge of the last FILL_DAYS days that has no sheet; each build_data.py run starts from the
+    sheets again, so a challenge switches to its sheet as soon as one is uploaded. A sheet is matched
+    to its Videre event by players (sheets give same-day pairs the same name, so names can't be used). Videre's deck names are translated to the sheets' names
+    using players who appear in both sources in recent events.
+    """
+    t0 = time.time()
+    d = json.loads(path.read_text(encoding="utf-8"))
+    T = {k: d[k] for k in ("names", "decks", "groups", "kinds")}
+    sheets = [e for e in d["events"] if len(e) <= 7]
+    previous = {e[0]: (e[2], e[6]) for e in d["events"] if len(e) > 7}
+    last = max(e[2] for e in sheets)
+    kinds = {T["kinds"][e[1]] for e in sheets}
+    fill_from = (date.today() - timedelta(days=FILL_DAYS)).isoformat()
+    since = min(date.fromisoformat(last), date.today() - timedelta(days=FILL_DAYS)) - timedelta(days=FILL_OVERLAP_DAYS)
+    events = [e for e in get_all(f"/events/legacy?min_date={since}&max_date={date.today()}") if e["name"] in kinds]
+    events.sort(key=lambda e: (e["date"], e["id"]))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        raws = list(pool.map(lambda e: event_raw("legacy", e), events))
+    packed, V, _ = pack_events("legacy", events, raws, previous)
+    V = {k: list(v) for k, v in V.items()}
+
+    # which sheet (if any) holds each Videre event: same date +-1 day, mostly the same players
+    sheet_players = [(e, date.fromisoformat(e[2]), {T["names"][e[4][i]] for i in range(0, len(e[4]), 6)})
+                     for e in sheets if e[2] >= since.isoformat()]
+    def sheet_of(e):
+        mine, day = {V["names"][e[4][i]] for i in range(0, len(e[4]), 6)}, date.fromisoformat(e[2])
+        best_e, best_share = None, 0.0
+        for se, sday, names in sheet_players:
+            if abs((sday - day).days) <= 1:
+                share = len(mine & names) / (min(len(mine), len(names)) or 1)
+                if share > best_share:
+                    best_e, best_share = se, share
+        return best_e if best_share >= 0.6 else None
+    sheet_for = {e[0]: sheet_of(e) for e in packed}
+    claimed = Counter(id(s_) for s_ in sheet_for.values() if s_)
+    if any(n > 1 for n in claimed.values()):
+        print(f"  note: {sum(1 for n in claimed.values() if n > 1)} sheets matched more than one Videre event")
+
+    # Videre label -> sheet label, learnt from players present in both sources
+    deck_votes: dict[str, Counter] = {}
+    group_votes: dict[str, Counter] = {}
+    for e in packed:
+        sheet = sheet_for[e[0]]
+        if not sheet:
+            continue
+        sp = {T["names"][sheet[4][i]]: (T["decks"][sheet[4][i + 1]], T["groups"][sheet[4][i + 2]])
+              for i in range(0, len(sheet[4]), 6)}
+        for i in range(0, len(e[4]), 6):
+            vd, vg = V["decks"][e[4][i + 1]], V["groups"][e[4][i + 2]]
+            got = sp.get(V["names"][e[4][i]])
+            if vd and got and got[0]:
+                deck_votes.setdefault(vd, Counter())[got] += 1
+                group_votes.setdefault(vg, Counter())[got[1]] += 1
+
+    def best(votes: Counter | None):
+        if not votes:
+            return None
+        top, n = votes.most_common(1)[0]
+        return top if n >= 3 and n / sum(votes.values()) >= 0.5 else None
+
+    ix = {k: {v: i for i, v in enumerate(T[k])} for k in T}
+    def put(table: str, value: str) -> int:
+        if value not in ix[table]:
+            ix[table][value] = len(T[table]); T[table].append(value)
+        return ix[table][value]
+
+    gap, mapped, kept = [], 0, 0
+    for e in packed:
+        if e[2] < fill_from or sheet_for[e[0]]:
+            continue
+        players = []
+        for i in range(0, len(e[4]), 6):
+            vd, vg = V["decks"][e[4][i + 1]], V["groups"][e[4][i + 2]]
+            deck, group = vd, vg
+            if vd:
+                hit = best(deck_votes.get(vd))
+                if hit:
+                    deck, group = hit; mapped += 1
+                else:
+                    group = best(group_votes.get(vg)) or vg; kept += 1
+            players += [put("names", V["names"][e[4][i]]), put("decks", deck), put("groups", group)] + e[4][i + 3:i + 6]
+        gap.append([e[0], put("kinds", V["kinds"][e[1]]), e[2], e[3], players, e[5], e[6], e[7]])
+
+    d.update(T)
+    d["events"] = sheets + gap
+    d["last"] = max(last, *(e[2] for e in gap)) if gap else last
+    d["sheets_last"] = last
+    d["filled"] = [e[2] for e in gap]
+    path.write_text(json.dumps(d, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+    matched = sum(1 for e in packed if sheet_for[e[0]])
+    print(f"{matched}/{len(packed)} recent Videre events matched to a sheet; newest sheet {last}; "
+          f"added {len(gap)} challenges from the last {FILL_DAYS} days without a sheet "
+          f"({', '.join(e[2] for e in gap) or 'none'}). Labels: {mapped} matched to sheet names, "
+          f"{kept} kept Videre's name ({len(deck_votes)} names learnt). Done in {time.time() - t0:.0f}s")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("format", help="MTGO format, e.g. vintage, modern, pauper")
+    ap.add_argument("--since", default=FIRST_MATCHES, help="first event date, YYYY-MM-DD")
+    ap.add_argument("--fill", action="store_true",
+                    help="legacy only: add Videre events newer than the newest sheet to site/data.json")
+    args = ap.parse_args()
+    sys.stdout.reconfigure(encoding="utf-8")
+    fmt = args.format.lower()
+    if args.fill:
+        return fill_legacy(ROOT / "site" / "data.json")
+    t0 = time.time()
+    until = date.today()
+    since = date.fromisoformat(args.since)
+
+    events = [e for e in get_all(f"/events/{fmt}?min_date={since}&max_date={until}") if e["kind"] in KINDS]
+    events.sort(key=lambda e: (e["date"], e["id"]))
+    print(f"{len(events)} {fmt} challenges since {since} ({time.time() - t0:.0f}s)", flush=True)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        raws = list(pool.map(lambda e: event_raw(fmt, e), events))
+    print(f"  downloaded ({time.time() - t0:.0f}s)", flush=True)
+
+    out = ROOT / "site" / f"data-{fmt}.json"
+    previous = {}
+    if out.exists():
+        try:
+            previous = {e[0]: (e[2], e[6]) for e in json.loads(out.read_text(encoding="utf-8"))["events"] if len(e) > 7}
+        except (ValueError, KeyError):
+            pass
+    packed, tables, stats = pack_events(fmt, events, raws, previous)
 
     data = {
         "built": datetime.now(timezone.utc).isoformat(timespec="minutes"),
@@ -353,8 +472,8 @@ def main():
     n_matches = sum(len(e[5]) // 5 for e in packed)
     print(f"\nWrote {out} ({out.stat().st_size / 1e3:.0f} kB): {len(packed)} events, {n_matches:,} matches, "
           f"{len(tables['decks'])} deck labels, {data['first']} .. {data['last']}")
-    print(f"{guessed}/{len(unlabelled)} decklists Videre had not labelled were matched to a similar labelled deck")
-    print(f"classify.json relabelled {relabelled} decklists; {colour_only} top-32 decks still have colour-only labels")
+    print(f"{stats['guessed']}/{stats['unlabelled']} decklists Videre had not labelled were matched to a similar labelled deck")
+    print(f"classify.json relabelled {stats['relabelled']} decklists; {stats['colour_only']} top-32 decks still have colour-only labels")
     print(f"Done in {time.time() - t0:.0f}s")
 
 
