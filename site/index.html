@@ -140,6 +140,20 @@
   .rd.own { border-style: dashed; background: none; }
   td.btns { white-space: nowrap; }
   .pbanner .internal { display: block; margin-top: 4px; }
+  .picker { position: relative; }
+  .pickmenu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: min(380px, calc(100vw - 32px));
+              background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px;
+              box-shadow: 0 10px 28px rgba(0, 0, 0, .18); }
+  .pickshort { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .pickshort button { min-height: 30px; padding: 4px 9px; }
+  .picklist { display: flex; flex-direction: column; max-height: 340px; overflow: auto; }
+  .picklist label { display: flex; gap: 8px; align-items: center; padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; min-height: 36px; }
+  .picklist label:hover { background: var(--sel); }
+  .picklist input { min-height: 0; flex: none; }
+  .picklist .meta { margin-left: auto; padding-left: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .prov { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+          border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+  .range-off { opacity: .45; }
   .w { color: rgb(var(--good)); font-weight: 600; } .l { color: rgb(var(--bad)); font-weight: 600; }
   a { color: var(--accent); }
   footer { margin-top: 22px; font-size: 12px; color: var(--muted); max-width: 90ch; }
@@ -176,6 +190,17 @@
         <button data-m="3">3M</button>
         <button data-m="6">6M</button>
         <button data-m="12">1Y</button>
+      </div>
+      <div class="picker" id="picker">
+        <button id="pickBtn" aria-haspopup="true" aria-expanded="false" aria-controls="pickMenu">Challenges ▾</button>
+        <div class="pickmenu" id="pickMenu" role="group" aria-label="Pick recent challenges" hidden>
+          <div class="pickshort">
+            <button data-n="1">Latest 1</button><button data-n="2">Latest 2</button><button data-n="3">Latest 3</button>
+            <button id="pickClear">Clear</button>
+          </div>
+          <div class="picklist" id="pickList"></div>
+          <p class="hint" style="margin:6px 0 0">Ticked challenges are combined and replace the date range. Every cell counts from 1 match. Pick a date preset or Clear to go back.</p>
+        </div>
       </div>
     </div>
 
@@ -377,6 +402,7 @@ async function switchFormat(fmt) {
   if (fmt === state.fmt || !FORMATS[fmt]) return;
   state.fmt = fmt; store.set("lmm-format", fmt);
   state.players = []; store.set("lmm-player", []);
+  state.picks.clear(); openMenu(false);
   state.focusR = []; state.focusC = []; store.set(FOCUS.R.key, []); store.set(FOCUS.C.key, []);
   state.picked = null; state.hlRow = state.hlCol = null;
   $("status").classList.remove("err");
@@ -431,6 +457,7 @@ function syncSlider() {
   });
 }
 function setRange(s, e) {
+  if (state.picks.size) { state.picks.clear(); updatePickUI(); }   // a date choice leaves the picked challenges
   s = clamp(s); e = clamp(e);
   if (s > e) [s, e] = [e, s];
   $("start").value = s; $("end").value = e;
@@ -438,6 +465,7 @@ function setRange(s, e) {
 }
 let slideTimer = 0;
 function onSlide() {
+  if (state.picks.size) { state.picks.clear(); updatePickUI(); }
   let a = +$("rA").value, b = +$("rB").value;
   if (a > b) [a, b] = [b, a];
   const [ya, ma] = monthList[a], [yb, mb] = monthList[b];
@@ -450,8 +478,8 @@ $("start").onchange = $("end").onchange = () => setRange($("start").value || sta
 
 function applyRange() {
   const s = $("start").value, e = $("end").value;
-  state.events = state.all.filter((ev) => ev.date >= s && ev.date <= e);
-  store.set(rangeKey(), [s, e]);
+  if (state.picks.size) state.events = state.all.filter((ev) => state.picks.has(ev.id));
+  else { state.events = state.all.filter((ev) => ev.date >= s && ev.date <= e); store.set(rangeKey(), [s, e]); }
   buildKinds(); render();
 }
 
@@ -482,8 +510,80 @@ function buildKinds() {
     cb.onchange = () => { cb.checked ? kindsOff.delete(k) : kindsOff.add(k); store.set("lmm-kinds-off", [...kindsOff]); render(); };
     $("kinds").appendChild(span);
   }
-  $("kindsRow").hidden = kinds.length < 2;
+  $("kindsRow").hidden = kinds.length < 2 || state.picks.size > 0;
 }
+
+/* ---------- recent challenges picker ---------- */
+// Ticked challenges replace the date range (picked by event, so same-day challenges stay apart).
+// Not remembered between visits: "latest" changes every day.
+state.picks = new Set();
+const PICK_N = 10;
+const kindOff = (ev) => !state.picks.size && kindsOff.has(ev.kind);
+function recentEvents() {
+  const recent = state.all.map((ev, i) => [ev, i])
+    .sort((a, b) => b[0].date.localeCompare(a[0].date) || b[1] - a[1]).slice(0, PICK_N).map(([ev]) => ev);
+  const label = (ev) => {
+    const [y, m, d] = ev.date.split("-").map(Number);
+    const wd = new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short" });
+    return `${wd} ${m}/${d} · ${ev.kind.replace(FORMATS[state.fmt].label + " ", "")}`;
+  };
+  const out = recent.map((ev) => ({ ev, text: label(ev) }));
+  // Two same-name challenges on one day: the list is newest first, so the later one comes first.
+  for (const o of out) {
+    const twins = out.filter((x) => x.text === o.text);
+    if (twins.length > 1) o.suffix = twins.indexOf(o) === twins.length - 1 ? " (1st)" : " (2nd)";
+  }
+  return out;
+}
+function updatePickUI() {
+  const recent = recentEvents(), n = state.picks.size, on = n > 0;
+  const btn = $("pickBtn");
+  const one = on && n === 1 ? recent.find((r) => state.picks.has(r.ev.id)) : null;
+  btn.textContent = (on ? (one ? one.text + (one.suffix || "") : `${n} challenges`) : "Challenges") + " ▾";
+  btn.classList.toggle("on", on);
+  const list = $("pickList"); list.innerHTML = "";
+  for (const { ev, text, suffix } of recent) {
+    const lab = document.createElement("label");
+    lab.innerHTML = `<input type="checkbox"><span></span><span class="meta"></span>`;
+    const cb = lab.querySelector("input"); cb.checked = state.picks.has(ev.id);
+    lab.querySelector("span").textContent = text + (suffix || "");
+    if (ev.videre && state.provider !== "videre") {
+      const p = document.createElement("span"); p.className = "prov"; p.textContent = "provisional";
+      p.title = "No community sheet yet: top 32 from the Videre Project"; lab.querySelector("span").appendChild(p);
+    }
+    lab.querySelector(".meta").textContent = `${ev.players.length} players`;
+    cb.onchange = () => { cb.checked ? state.picks.add(ev.id) : state.picks.delete(ev.id); pickChanged(); };
+    list.appendChild(lab);
+  }
+  // While challenges are picked the date controls and min-per-cell are paused (dimmed, still clickable).
+  for (const id of ["start", "end"]) $(id).closest("label").classList.toggle("range-off", on);
+  document.querySelector(".range").classList.toggle("range-off", on);
+  $("presets").classList.toggle("range-off", on);
+  if (on) document.querySelectorAll("#presets button").forEach((b) => b.classList.remove("on"));
+  $("minN").disabled = on; $("minN").title = on ? "Every cell counts from 1 match while challenges are picked" : "";
+}
+function pickChanged() {
+  if (!state.picks.size) syncSlider();
+  state.picked = null; state.hlRow = state.hlCol = null;
+  updatePickUI(); applyRange();
+}
+function setPicks(ids) { state.picks = new Set(ids); pickChanged(); }
+function placeMenu() {
+  const m = $("pickMenu"); m.style.left = "0px";
+  const r = m.getBoundingClientRect(), over = r.right - (document.documentElement.clientWidth - 16);
+  if (over > 0) m.style.left = `${-over}px`;
+}
+function openMenu(open) {
+  $("pickMenu").hidden = !open; $("pickBtn").setAttribute("aria-expanded", String(open));
+  if (open) placeMenu();
+}
+$("pickBtn").onclick = (e) => { e.stopPropagation(); openMenu($("pickMenu").hidden); };
+$("pickMenu").onclick = (e) => e.stopPropagation();
+document.addEventListener("click", () => openMenu(false));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("pickMenu").hidden) { openMenu(false); $("pickBtn").focus(); } });
+document.querySelectorAll("#pickMenu [data-n]").forEach((b) => b.onclick = () => setPicks(recentEvents().slice(0, +b.dataset.n).map((r) => r.ev.id)));
+$("pickClear").onclick = () => setPicks([]);
+window.addEventListener("resize", () => { if (!$("pickMenu").hidden) placeMenu(); });
 
 /* ---------- aggregation ---------- */
 function excluded(p, mode) {
@@ -508,7 +608,7 @@ function aggregate() {
   const keyOf = (p) => (level === "deck" ? p.deck : p.group) || "Unknown";
   if (state.players.length) return aggregatePlayer(state.players, { cells, decks, cell, deck, keyOf, unitGame, top8 });
   for (const ev of state.events) {
-    if (kindsOff.has(ev.kind)) continue;
+    if (kindOff(ev)) continue;
     events++;
     const out = ev.players.map((p) => excluded(p, mode));
     ev.players.forEach((p, i) => {
@@ -554,7 +654,7 @@ function aggregatePlayer(names, { cells, decks, cell, deck, keyOf, unitGame, top
   const opp = (k) => { let d = opps.get(k); if (!d) opps.set(k, d = { entries: 0, w: 0, l: 0, d: 0 }); return d; };
   let matches = 0, events = 0, entries = 0, top8s = 0, internal = 0;
   for (const ev of state.events) {
-    if (kindsOff.has(ev.kind)) continue;
+    if (kindOff(ev)) continue;
     const mine = new Set();
     ev.players.forEach((p, i) => { if (sel.has(p.name)) mine.add(i); });
     if (!mine.size) continue;
@@ -718,7 +818,7 @@ function renderPlayerBanner(agg) {
 /* ---------- render ---------- */
 function render() {
   const agg = state.agg = aggregate(), P = agg.player || null;
-  const minN = P ? 1 : Math.max(1, +$("minN").value || 1), topN = +$("topN").value;
+  const minN = P || state.picks.size ? 1 : Math.max(1, +$("minN").value || 1), topN = +$("topN").value;
   const toList = (m) => [...m.entries()].map(([name, d]) => ({ name, ...d, wr: pct(d.w, d.l) }))
     .sort((a, b) => b.entries - a.entries || a.name.localeCompare(b.name));
   const all = toList(agg.decks), oppAll = P ? toList(agg.opps) : all;
@@ -776,10 +876,12 @@ function render() {
   $("kDecks").textContent = P ? "Decks piloted" : "Decks in range";
   $("kExcl").textContent = P ? "Top 8s" : state.provider === "videre" ? "Players outside the top 32" : "Players excluded as drops";
   $("status").classList.remove("err");
-  const range = `from ${$("start").value} to ${$("end").value}`;
+  const picks = state.picks.size;
+  const range = picks ? `in the ${picks === 1 ? "picked challenge" : `${picks} picked challenges`}` : `from ${$("start").value} to ${$("end").value}`;
   $("status").textContent = P
-    ? (agg.events ? `${P}: ${agg.events} challenges${agg.multi ? ` (${agg.entries} entries)` : ""} ${range}.`
-                  : `${P} ${agg.multi ? "have" : "has"} no challenges ${range}. Widen the dates or pick another player.`)
+    ? (agg.events ? `${P}: ${agg.events} challenge${agg.events === 1 ? "" : "s"}${agg.multi ? ` (${agg.entries} entries)` : ""} ${range}.`
+                  : `${P} ${agg.multi ? "have" : "has"} no challenges ${range}. ${picks ? "Pick other challenges" : "Widen the dates"} or pick another player.`)
+    : picks ? `${agg.matches.toLocaleString()} matches ${range} (${state.events.slice().reverse().map((ev) => ev.name).join(", ")}). Every cell counts from 1 match.`
     : agg.events ? `${agg.events} challenges ${range}.`
     : "No challenges in this range. Widen the dates or turn an event type back on.";
   renderPlayerLog(agg);
@@ -972,7 +1074,7 @@ function renderPlayerLog(agg) {
   if (!P) { box.hidden = true; return; }
   const keyOf = agg.keyOf, rows = [], sel = new Set(agg.players);
   for (const ev of state.events) {
-    if (kindsOff.has(ev.kind)) continue;
+    if (kindOff(ev)) continue;
     ev.players.forEach((p, me) => { if (sel.has(p.name)) rows.push({ ev, me, p }); });
   }
   rows.sort((x, y) => y.ev.date.localeCompare(x.ev.date) || y.ev.id - x.ev.id || x.p.name.localeCompare(y.p.name));
@@ -1025,6 +1127,7 @@ $("csv").onclick = async () => {
 async function boot() {
   await loadData();
   setupRange();
+  updatePickUI();
   const saved = store.get(rangeKey());
   if (saved && saved[0] >= state.first && saved[1] <= state.last) setRange(saved[0], saved[1]);
   else setRange(addMonths(state.last, -3), state.last);   // default: past 3 months
